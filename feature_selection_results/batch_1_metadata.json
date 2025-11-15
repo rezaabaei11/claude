@@ -1,0 +1,10 @@
+{
+    "batch_id": 1,
+    "timestamp": "20251115_130632",
+    "n_total": 6,
+    "n_strong": 6,
+    "n_medium": 0,
+    "n_weak": 3,
+    "mean_cv_score": 0.5135730007336757,
+    "std_cv_score": 0.01059816516508704
+}
