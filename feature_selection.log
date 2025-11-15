@@ -1,0 +1,108 @@
+2025-11-15 11:43:10,049 - INFO - Copy-on-Write mode enabled
+2025-11-15 11:43:10,049 - INFO - Pandas 2.3.3, NumPy 2.3.4
+2025-11-15 11:43:10,085 - INFO - Batch 1 starting
+2025-11-15 11:43:10,087 - WARNING - Removing 1 constant features
+2025-11-15 11:43:10,118 - INFO - Features: 6, Samples: 6818
+2025-11-15 11:43:10,118 - INFO - Train: 5454, Test: 1314, Gap: 50
+2025-11-15 11:43:10,118 - INFO - Detecting multicollinearity
+2025-11-15 11:43:10,120 - INFO - High correlation pairs: 6, Condition Index: 211.51
+2025-11-15 11:43:10,120 - INFO - Null Importance with statistical significance testing
+2025-11-15 11:43:14,129 - INFO - Gain - Significant: 0, Above 99th: 0
+2025-11-15 11:43:14,129 - INFO - Split - Significant: 0, Above 99th: 0
+2025-11-15 11:43:14,157 - INFO - Boosting ensemble with optimized parameters
+2025-11-15 11:43:15,768 - INFO - Feature fraction analysis
+2025-11-15 11:43:16,877 - INFO - Adversarial validation for time series
+2025-11-15 11:43:16,888 - INFO - High shift features: 0
+2025-11-15 11:43:16,916 - INFO - RFE to 20 features
+2025-11-15 11:43:16,984 - INFO - Cross-validation multi-metric
+2025-11-15 11:43:17,049 - INFO - Stability bootstrap analysis
+2025-11-15 11:43:17,740 - INFO - Stable features (gain): 1, (split): 1
+2025-11-15 11:43:17,740 - INFO - Ensemble ranking with weighted aggregation and multicollinearity penalty
+2025-11-15 11:43:17,743 - INFO - Strong: 6, Medium: 0, Weak: 3
+2025-11-15 11:43:17,746 - INFO - Saved to feature_selection_results
+2025-11-15 11:43:17,773 - INFO - Batch 1 completed
+2025-11-15 11:43:17,773 - INFO - Batch 2 starting
+2025-11-15 11:43:17,776 - WARNING - Removing 1 constant features
+2025-11-15 11:43:17,798 - INFO - Features: 6, Samples: 6818
+2025-11-15 11:43:17,798 - INFO - Train: 5454, Test: 1314, Gap: 50
+2025-11-15 11:43:17,799 - INFO - Detecting multicollinearity
+2025-11-15 11:43:17,800 - INFO - High correlation pairs: 6, Condition Index: 187.65
+2025-11-15 11:43:17,800 - INFO - Null Importance with statistical significance testing
+2025-11-15 11:43:21,836 - INFO - Gain - Significant: 0, Above 99th: 0
+2025-11-15 11:43:21,836 - INFO - Split - Significant: 0, Above 99th: 0
+2025-11-15 11:43:21,862 - INFO - Boosting ensemble with optimized parameters
+2025-11-15 11:43:23,383 - INFO - Feature fraction analysis
+2025-11-15 11:43:24,481 - INFO - Adversarial validation for time series
+2025-11-15 11:43:24,492 - INFO - High shift features: 0
+2025-11-15 11:43:24,521 - INFO - RFE to 20 features
+2025-11-15 11:43:24,583 - INFO - Cross-validation multi-metric
+2025-11-15 11:43:24,651 - INFO - Stability bootstrap analysis
+2025-11-15 11:43:25,339 - INFO - Stable features (gain): 2, (split): 2
+2025-11-15 11:43:25,339 - INFO - Ensemble ranking with weighted aggregation and multicollinearity penalty
+2025-11-15 11:43:25,342 - INFO - Strong: 6, Medium: 0, Weak: 3
+2025-11-15 11:43:25,344 - INFO - Saved to feature_selection_results
+2025-11-15 11:43:25,370 - INFO - Batch 2 completed
+2025-11-15 11:43:25,370 - INFO - Batch 3 starting
+2025-11-15 11:43:25,372 - WARNING - Removing 1 constant features
+2025-11-15 11:43:25,401 - INFO - Features: 6, Samples: 6818
+2025-11-15 11:43:25,401 - INFO - Train: 5454, Test: 1314, Gap: 50
+2025-11-15 11:43:25,401 - INFO - Detecting multicollinearity
+2025-11-15 11:43:25,403 - INFO - High correlation pairs: 6, Condition Index: 427.81
+2025-11-15 11:43:25,403 - INFO - Null Importance with statistical significance testing
+2025-11-15 11:43:29,592 - INFO - Gain - Significant: 0, Above 99th: 0
+2025-11-15 11:43:29,593 - INFO - Split - Significant: 0, Above 99th: 0
+2025-11-15 11:43:29,621 - INFO - Boosting ensemble with optimized parameters
+2025-11-15 11:43:31,278 - INFO - Feature fraction analysis
+2025-11-15 11:43:32,391 - INFO - Adversarial validation for time series
+2025-11-15 11:43:32,401 - INFO - High shift features: 0
+2025-11-15 11:43:32,427 - INFO - RFE to 20 features
+2025-11-15 11:43:32,491 - INFO - Cross-validation multi-metric
+2025-11-15 11:43:32,550 - INFO - Stability bootstrap analysis
+2025-11-15 11:43:33,238 - INFO - Stable features (gain): 3, (split): 3
+2025-11-15 11:43:33,239 - INFO - Ensemble ranking with weighted aggregation and multicollinearity penalty
+2025-11-15 11:43:33,241 - INFO - Strong: 6, Medium: 0, Weak: 3
+2025-11-15 11:43:33,243 - INFO - Saved to feature_selection_results
+2025-11-15 11:43:33,266 - INFO - Batch 3 completed
+2025-11-15 11:43:33,267 - INFO - Batch 4 starting
+2025-11-15 11:43:33,269 - WARNING - Removing 1 constant features
+2025-11-15 11:43:33,290 - INFO - Features: 6, Samples: 6818
+2025-11-15 11:43:33,290 - INFO - Train: 5454, Test: 1314, Gap: 50
+2025-11-15 11:43:33,291 - INFO - Detecting multicollinearity
+2025-11-15 11:43:33,292 - INFO - High correlation pairs: 6, Condition Index: 112.22
+2025-11-15 11:43:33,292 - INFO - Null Importance with statistical significance testing
+2025-11-15 11:43:37,325 - INFO - Gain - Significant: 0, Above 99th: 0
+2025-11-15 11:43:37,325 - INFO - Split - Significant: 0, Above 99th: 0
+2025-11-15 11:43:37,351 - INFO - Boosting ensemble with optimized parameters
+2025-11-15 11:43:38,882 - INFO - Feature fraction analysis
+2025-11-15 11:43:39,997 - INFO - Adversarial validation for time series
+2025-11-15 11:43:40,007 - INFO - High shift features: 0
+2025-11-15 11:43:40,033 - INFO - RFE to 20 features
+2025-11-15 11:43:40,095 - INFO - Cross-validation multi-metric
+2025-11-15 11:43:40,159 - INFO - Stability bootstrap analysis
+2025-11-15 11:43:40,851 - INFO - Stable features (gain): 2, (split): 2
+2025-11-15 11:43:40,851 - INFO - Ensemble ranking with weighted aggregation and multicollinearity penalty
+2025-11-15 11:43:40,854 - INFO - Strong: 6, Medium: 0, Weak: 3
+2025-11-15 11:43:40,856 - INFO - Saved to feature_selection_results
+2025-11-15 11:43:40,884 - INFO - Batch 4 completed
+2025-11-15 11:43:40,884 - INFO - Batch 5 starting
+2025-11-15 11:43:40,886 - WARNING - Removing 1 constant features
+2025-11-15 11:43:40,909 - INFO - Features: 6, Samples: 6818
+2025-11-15 11:43:40,909 - INFO - Train: 5454, Test: 1314, Gap: 50
+2025-11-15 11:43:40,909 - INFO - Detecting multicollinearity
+2025-11-15 11:43:40,911 - INFO - High correlation pairs: 6, Condition Index: 574.51
+2025-11-15 11:43:40,911 - INFO - Null Importance with statistical significance testing
+2025-11-15 11:43:44,892 - INFO - Gain - Significant: 0, Above 99th: 0
+2025-11-15 11:43:44,893 - INFO - Split - Significant: 0, Above 99th: 0
+2025-11-15 11:43:44,921 - INFO - Boosting ensemble with optimized parameters
+2025-11-15 11:43:46,429 - INFO - Feature fraction analysis
+2025-11-15 11:43:47,521 - INFO - Adversarial validation for time series
+2025-11-15 11:43:47,532 - INFO - High shift features: 0
+2025-11-15 11:43:47,560 - INFO - RFE to 20 features
+2025-11-15 11:43:47,623 - INFO - Cross-validation multi-metric
+2025-11-15 11:43:47,686 - INFO - Stability bootstrap analysis
+2025-11-15 11:43:48,362 - INFO - Stable features (gain): 3, (split): 3
+2025-11-15 11:43:48,363 - INFO - Ensemble ranking with weighted aggregation and multicollinearity penalty
+2025-11-15 11:43:48,365 - INFO - Strong: 6, Medium: 0, Weak: 3
+2025-11-15 11:43:48,367 - INFO - Saved to feature_selection_results
+2025-11-15 11:43:48,395 - INFO - Batch 5 completed
+2025-11-15 11:43:48,395 - INFO - Processing completed
