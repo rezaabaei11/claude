@@ -127,82 +127,102 @@ class FeatureSelector(BaseEstimator):
         return hasattr(self, 'is_fitted_') and self.is_fitted_
 
     def optimize_dtypes(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        بهینه‌سازی حافظه با استراتژی Pandas.md
+        """
         if not self.dtype_optimization:
             return df
+        
+        memory_before = df.memory_usage(deep=True).sum() / 1024**2
         
         for col in df.columns:
             col_type = df[col].dtype
             
-            # Object columns: convert to category if low cardinality
+            # Object columns: convert to category if low cardinality (< 50%)
             if col_type == 'object':
                 num_unique = df[col].nunique()
                 total_rows = len(df)
-                if num_unique / total_rows < 0.05 and self.use_categorical:
+                if num_unique / total_rows < 0.5 and self.use_categorical:
                     df[col] = df[col].astype('category')
                 continue
             
-            # Integer columns: preserve int64 for financial data to avoid precision loss
-            if col_type.name.startswith('int'):
-                # Keep integers as int64 - downcasting can lose precision for financial metrics
-                # Only downcast if explicitly identified as ID or index-like columns
+            # Integer optimization (Pandas.md strategy)
+            if str(col_type)[:3] == 'int':
                 col_min = df[col].min()
                 col_max = df[col].max()
-                is_likely_id = col.lower() in ['id', 'idx', 'index'] or (col_max < 1000 and col_min >= 0)
-                if is_likely_id:
-                    if col_min >= -128 and col_max <= 127:
-                        df[col] = df[col].astype(np.int8)
-                    elif col_min >= -32768 and col_max <= 32767:
-                        df[col] = df[col].astype(np.int16)
-                    elif col_min >= -2147483648 and col_max <= 2147483647:
-                        df[col] = df[col].astype(np.int32)
+                
+                # Aggressive optimization for IDs/indices
+                if col_min >= np.iinfo(np.int8).min and col_max <= np.iinfo(np.int8).max:
+                    df[col] = df[col].astype(np.int8)
+                elif col_min >= np.iinfo(np.int16).min and col_max <= np.iinfo(np.int16).max:
+                    df[col] = df[col].astype(np.int16)
+                elif col_min >= np.iinfo(np.int32).min and col_max <= np.iinfo(np.int32).max:
+                    df[col] = df[col].astype(np.int32)
             
-            # Float columns: downcast and apply sparse for high missing
-            elif col_type.name.startswith('float'):
+            # Float optimization (Pandas.md strategy)
+            elif str(col_type)[:5] == 'float':
                 if df[col].notna().sum() > 0:
                     col_min = df[col].min()
                     col_max = df[col].max()
+                    
+                    # Safe downcasting to float32
                     if not np.isnan(col_min) and not np.isnan(col_max):
                         if col_min > np.finfo(np.float32).min and col_max < np.finfo(np.float32).max:
                             df[col] = df[col].astype(np.float32)
-                    
-                    missing_ratio = df[col].isna().sum() / len(df)
-                    # Only apply sparse for VERY high missing (> 50%)
-                    if missing_ratio > 0.5 and self.use_sparse:
-                        df[col] = df[col].astype(pd.SparseDtype('float32', np.nan))
+        
+        memory_after = df.memory_usage(deep=True).sum() / 1024**2
+        memory_reduction = (1 - memory_after / memory_before) * 100
+        
+        logging.info(f'Memory optimization: {memory_before:.2f} MB → {memory_after:.2f} MB ({memory_reduction:.1f}% reduction)')
         
         return df
 
     def preprocess_features(self, X: pd.DataFrame, y: pd.Series) -> Tuple[pd.DataFrame, pd.Series]:
+        """
+        پیش‌پردازش پیشرفته با استراتژی Pandas.md
+        """
         X = X.copy()
         
+        # حذف ستون‌های ثابت
         constant_cols = X.columns[X.nunique() <= 1].tolist()
         if constant_cols:
             logging.warning(f'Removing {len(constant_cols)} constant features')
             X = X.drop(columns=constant_cols)
         
+        # حذف ستون‌های با Missing بالا (>90%)
         high_missing_cols = X.columns[X.isnull().mean() > 0.9].tolist()
         if high_missing_cols:
             logging.warning(f'Removing {len(high_missing_cols)} features with >90% missing')
             X = X.drop(columns=high_missing_cols)
         
+        # بهینه‌سازی حافظه قبل از imputation
         X = self.optimize_dtypes(X)
         
+        # مدیریت Missing Data با روش Pandas.md (interpolation برای time series)
         missing_mask = X.isnull().sum() > 0
         if missing_mask.any():
             missing_cols = X.columns[missing_mask].tolist()
+            logging.info(f'Handling missing data in {len(missing_cols)} columns')
+            
             for col in missing_cols:
-                if X[col].dtype == 'float32' or X[col].dtype.name.startswith('float'):
-                    # Use interpolation for time series instead of ffill/bfill
-                    X[col] = X[col].interpolate(method='linear', limit_direction='both')
-                    # Forward/backward fill remaining NaNs
+                if X[col].dtype == 'float32' or str(X[col].dtype).startswith('float'):
+                    # Interpolation برای داده‌های عددی (مناسب time series)
+                    X[col] = X[col].interpolate(method='linear', limit_direction='both', limit=5)
+                    # Forward/Backward fill برای باقیمانده
                     X[col] = X[col].ffill().bfill()
                 else:
+                    # Mode fill برای categorical
                     if len(X[col].mode()) > 0:
                         X[col] = X[col].fillna(X[col].mode()[0])
                     else:
                         X[col] = X[col].fillna(0)
         
+        # بهینه‌سازی نهایی حافظه
+        X = self.optimize_dtypes(X)
+        
+        # جمع‌آوری زباله برای آزادسازی حافظه
         gc.collect()
+        
         return X, y
 
     def temporal_split(
@@ -906,7 +926,15 @@ class FeatureSelector(BaseEstimator):
         batch_id: int,
         output_dir: str = 'feature_selection_results'
     ):
-        logging.info(f'Batch {batch_id} starting')
+        import psutil
+        import time
+        
+        # شروع زمان‌سنجی
+        start_time = time.time()
+        process = psutil.Process()
+        memory_start = process.memory_info().rss / 1024**2  # MB
+        
+        logging.info(f'Batch {batch_id} starting - Memory: {memory_start:.2f} MB')
         
         X = features_df.drop(columns=[self.target_column])
         y = features_df[self.target_column]
@@ -948,18 +976,27 @@ class FeatureSelector(BaseEstimator):
         
         categorized = self.categorize(df_ranking)
         
+        # پایان زمان‌سنجی و مصرف حافظه
+        end_time = time.time()
+        memory_end = process.memory_info().rss / 1024**2  # MB
+        execution_time = end_time - start_time
+        memory_delta = memory_end - memory_start
+        
         self._save(
             df_ranking=df_ranking,
             categorized=categorized,
             cv_metrics=cv_metrics,
             batch_id=batch_id,
-            output_dir=output_dir
+            output_dir=output_dir,
+            execution_time=execution_time,
+            memory_used=memory_delta
         )
         
         self.is_fitted_ = True
         
         gc.collect()
-        logging.info(f'Batch {batch_id} completed')
+        logging.info(f'Batch {batch_id} completed - Time: {execution_time:.2f}s, Memory Δ: {memory_delta:+.2f} MB')
+
 
     def _save(
         self,
@@ -967,7 +1004,9 @@ class FeatureSelector(BaseEstimator):
         categorized: Dict,
         cv_metrics: Dict,
         batch_id: int,
-        output_dir: str
+        output_dir: str,
+        execution_time: float = 0,
+        memory_used: float = 0
     ):
         output_path = Path(output_dir)
         output_path.mkdir(exist_ok=True)
@@ -1002,7 +1041,9 @@ class FeatureSelector(BaseEstimator):
             'n_medium': len(categorized['medium']),
             'n_weak': len(categorized['weak']),
             'mean_cv_score': float(cv_metrics['mean_cv_score']),
-            'std_cv_score': float(cv_metrics['std_cv_score'])
+            'std_cv_score': float(cv_metrics['std_cv_score']),
+            'execution_time_sec': float(execution_time),
+            'memory_used_mb': float(memory_used)
         }
         
         with open(output_path / f'batch_{batch_id}_metadata.json', 'w') as f:
