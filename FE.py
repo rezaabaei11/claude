@@ -103,15 +103,17 @@ class FeatureSelector(BaseEstimator):
             'objective': 'binary' if classification else 'regression',
             'metric': 'binary_logloss' if classification else 'rmse',
             'boosting_type': 'gbdt',
-            'learning_rate': 0.03,
+            'learning_rate': 0.02,  # کاهش برای دقت بهتر (از 0.03 به 0.02)
             'num_leaves': 31,
-            'max_depth': -1,
-            'feature_fraction': 0.7,
+            'max_depth': 6,  # محدود کردن عمق برای overfitting کمتر
+            'feature_fraction': 0.8,  # افزایش (از 0.7 به 0.8)
             'bagging_fraction': 0.7,
             'bagging_freq': 5,
             'min_data_in_leaf': 50,
-            'lambda_l1': 0.1,
-            'lambda_l2': 0.1,
+            'lambda_l1': 0.3,  # افزایش regularization (از 0.1 به 0.3)
+            'lambda_l2': 0.3,  # افزایش regularization (از 0.1 به 0.3)
+            'path_smooth': 1.0,  # اضافه کردن path smoothing برای regularization
+            'min_gain_to_split': 0.01,  # اضافه کردن حداقل gain برای split
             'verbosity': -1,
             'random_state': random_state,
             'deterministic': True,
@@ -307,8 +309,8 @@ class FeatureSelector(BaseEstimator):
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        n_actual: int = 3,  # کاهش از 5 به 3
-        n_null: int = 20  # کاهش از 50 به 20
+        n_actual: int = 10,  # افزایش برای دقت بهتر (از 3 به 10)
+        n_null: int = 50  # افزایش برای اعتبار بهتر (از 20 به 50)
     ) -> Dict:
         logging.info('Null Importance with statistical significance testing')
         n_features = len(X.columns)
@@ -428,7 +430,7 @@ class FeatureSelector(BaseEstimator):
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        n_runs: int = 3
+        n_runs: int = 5  # افزایش برای پایداری بهتر (از 3 به 5)
     ) -> Dict:
         logging.info('Boosting ensemble with optimized parameters')
         ensemble_results = defaultdict(list)
@@ -475,7 +477,7 @@ class FeatureSelector(BaseEstimator):
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        n_runs: int = 3
+        n_runs: int = 5  # افزایش برای پایداری بهتر (از 3 به 5)
     ) -> Dict:
         logging.info('Feature fraction analysis')
         fraction_results = defaultdict(list)
@@ -611,7 +613,7 @@ class FeatureSelector(BaseEstimator):
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        n_splits: int = 2  # کاهش از 3 به 2
+        n_splits: int = 3  # افزایش برای دقت بهتر (از 2 به 3)
     ) -> Dict:
         logging.info('Cross-validation multi-metric')
         tscv = TimeSeriesSplit(n_splits=n_splits, gap=50)
@@ -700,7 +702,7 @@ class FeatureSelector(BaseEstimator):
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        n_bootstrap: int = 10,  # کاهش از 30 به 10
+        n_bootstrap: int = 20,  # افزایش برای پایداری بهتر (از 10 به 20)
         threshold: float = 0.75
     ) -> Dict:
         logging.info('Stability bootstrap analysis')
@@ -1018,7 +1020,7 @@ def main():
     selector = FeatureSelector(
         target_column=TARGET_COLUMN,
         classification=CLASSIFICATION,
-        n_estimators=200,  # کاهش از 500 به 200
+        n_estimators=300,  # افزایش برای دقت بهتر (از 200 به 300)
         test_size_ratio=0.2,
         random_state=42,
         n_jobs=N_JOBS,
