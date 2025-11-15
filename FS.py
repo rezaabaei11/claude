@@ -107,29 +107,44 @@ class FeatureSelector(BaseEstimator):
             except Exception as e:
                 logging.warning(f'PyArrow backend not available: {str(e)}')
         
-        os.environ['OMP_NUM_THREADS'] = str(os.cpu_count() if n_jobs == -1 else max(1, n_jobs))
+        # CPU Optimization با physical cores (md1.md بخش 1.2)
+        try:
+            import psutil
+            physical_cores = psutil.cpu_count(logical=False)
+            if physical_cores:
+                os.environ['OMP_NUM_THREADS'] = str(physical_cores)
+                self.num_threads = physical_cores
+                logging.info(f'Using {physical_cores} physical CPU cores')
+            else:
+                self.num_threads = os.cpu_count() if n_jobs == -1 else max(1, n_jobs)
+                os.environ['OMP_NUM_THREADS'] = str(self.num_threads)
+        except ImportError:
+            self.num_threads = os.cpu_count() if n_jobs == -1 else max(1, n_jobs)
+            os.environ['OMP_NUM_THREADS'] = str(self.num_threads)
+            logging.warning('psutil not available, using logical cores')
         
         self.base_params = {
             'objective': 'binary' if classification else 'regression',
             'metric': 'binary_logloss' if classification else 'rmse',
             'boosting_type': 'gbdt',
-            'learning_rate': 0.01,  # کاهش برای دقت بهتر
-            'num_leaves': 31,
-            'max_depth': 5,  # محدود کردن عمق برای overfitting کمتر
-            'feature_fraction': 0.8,
-            'bagging_fraction': 0.7,
+            'learning_rate': 0.01,  # کاهش برای دقت بهتر (md1.md بخش 5.4.2)
+            'num_leaves': 31,  # نه بیشتر (md1.md بخش 5.4.2)
+            'max_depth': 5,  # محدود کردن عمق (md1.md: max 6)
+            'feature_fraction': 0.8,  # کاهش برای جلوگیری از overfit (md1.md بخش 5.4.2)
+            'bagging_fraction': 0.7,  # کاهش (md1.md بخش 5.4.2)
             'bagging_freq': 5,
-            'min_data_in_leaf': 50,
-            'lambda_l1': 0.5,  # افزایش regularization
-            'lambda_l2': 0.5,  # افزایش regularization
-            'path_smooth': 1.0,  # اضافه کردن path smoothing (Pandas.md بخش 3.2)
-            'min_gain_to_split': 0.01,  # حداقل gain برای split
+            'min_data_in_leaf': 50,  # افزایش برای دقت (md1.md بخش 5.4.2)
+            'lambda_l1': 0.5,  # افزایش regularization (md1.md بخش 5.4.2)
+            'lambda_l2': 0.5,  # افزایش regularization (md1.md بخش 5.4.2)
+            'path_smooth': 2.0,  # افزایش برای regularization بیشتر (md1.md بخش 5.4.2)
+            'min_gain_to_split': 0.02,  # افزایش (md1.md بخش 5.4.2)
             'verbosity': -1,
             'random_state': random_state,
-            'deterministic': True,
-            'force_col_wise': True,  # بهینه برای features زیاد (Pandas.md بخش 4.2)
-            'num_threads': -1,
-            'max_bin': 255,  # بهینه‌سازی حافظه histogram (Pandas.md توصیه)
+            'deterministic': True,  # (md1.md بخش 1.2)
+            'force_col_wise': True,  # بهینه برای features زیاد (md1.md بخش 1.2)
+            'num_threads': self.num_threads,  # استفاده از physical cores (md1.md بخش 1.2)
+            'max_bin': 255,  # بهینه‌سازی حافظه histogram
+            'histogram_pool_size': 8192,  # 8GB pool size (md1.md بخش 4.1)
         }
         
         logging.info(f'Pandas {pd.__version__}, NumPy {np.__version__}')
@@ -395,7 +410,12 @@ class FeatureSelector(BaseEstimator):
         sample_weights = self.compute_sample_weights(y)
         
         for run in range(n_actual):
-            train_data = lgb.Dataset(X, label=y, weight=sample_weights, free_raw_data=False)
+            # استفاده از two_round برای بهینه‌سازی حافظه (md1.md بخش 4.2)
+            train_data = lgb.Dataset(
+                X, label=y, weight=sample_weights, 
+                params={'two_round': True},
+                free_raw_data=False
+            )
             run_params = params.copy()
             run_params['random_state'] = self.random_state + run
             run_params['seed'] = self.random_state + run
@@ -404,15 +424,20 @@ class FeatureSelector(BaseEstimator):
                 run_params,
                 train_data,
                 num_boost_round=300,
-                callbacks=[lgb.log_evaluation(period=0)]
+                callbacks=[lgb.log_evaluation(period=0)]  # Callbacks صحیح LightGBM 4.0+ (md1.md بخش 1.4)
             )
             
+            # استفاده از 'gain' به جای 'split' (md1.md بخش 2.2: Gain بهتر است)
             actual_gain[run, :] = model.feature_importance(importance_type='gain')
             actual_split[run, :] = model.feature_importance(importance_type='split')
         
         for run in range(n_null):
             y_shuffled = y.sample(frac=1, random_state=self.random_state + n_actual + run).values
-            train_data = lgb.Dataset(X, label=y_shuffled, weight=sample_weights, free_raw_data=False)
+            train_data = lgb.Dataset(
+                X, label=y_shuffled, weight=sample_weights,
+                params={'two_round': True},  # md1.md بخش 4.2
+                free_raw_data=False
+            )
             run_params = params.copy()
             run_params['random_state'] = self.random_state + n_actual + run
             run_params['seed'] = self.random_state + n_actual + run
@@ -513,7 +538,12 @@ class FeatureSelector(BaseEstimator):
         ]
         
         for run in range(n_runs):
-            train_data = lgb.Dataset(X, label=y, weight=sample_weights, free_raw_data=False)
+            # two_round loading (md1.md بخش 4.2)
+            train_data = lgb.Dataset(
+                X, label=y, weight=sample_weights,
+                params={'two_round': True},
+                free_raw_data=False
+            )
             for booster_name, booster_params in booster_configs:
                 run_params = params.copy()
                 run_params.update(booster_params)
@@ -560,7 +590,12 @@ class FeatureSelector(BaseEstimator):
         ]
         
         for run in range(n_runs):
-            train_data = lgb.Dataset(X, label=y, weight=sample_weights, free_raw_data=False)
+            # two_round loading (md1.md بخش 4.2)
+            train_data = lgb.Dataset(
+                X, label=y, weight=sample_weights,
+                params={'two_round': True},
+                free_raw_data=False
+            )
             for config_name, config_params in configs:
                 run_params = params.copy()
                 run_params.update(config_params)
@@ -603,9 +638,11 @@ class FeatureSelector(BaseEstimator):
         
         train_size = int(0.8 * len(X_combined))
         
+        # استفاده از two_round برای کاهش memory usage (md1.md بخش 4.2)
         train_data = lgb.Dataset(
             X_combined.iloc[:train_size],
             label=y_combined[:train_size],
+            params={'two_round': True},  # کاهش 50% peak memory (md1.md بخش 4.2)
             free_raw_data=False
         )
         
@@ -613,6 +650,7 @@ class FeatureSelector(BaseEstimator):
             X_combined.iloc[train_size:],
             label=y_combined[train_size:],
             reference=train_data,
+            params={'two_round': True},
             free_raw_data=False
         )
         
@@ -702,8 +740,17 @@ class FeatureSelector(BaseEstimator):
             
             weights_train = sample_weights[train_idx]
             
-            train_data = lgb.Dataset(X_train, label=y_train, weight=weights_train, free_raw_data=False)
-            val_data = lgb.Dataset(X_val, label=y_val, reference=train_data, free_raw_data=False)
+            # two_round loading (md1.md بخش 4.2)
+            train_data = lgb.Dataset(
+                X_train, label=y_train, weight=weights_train,
+                params={'two_round': True},
+                free_raw_data=False
+            )
+            val_data = lgb.Dataset(
+                X_val, label=y_val, reference=train_data,
+                params={'two_round': True},
+                free_raw_data=False
+            )
             
             run_params = params.copy()
             run_params['n_estimators'] = 200
@@ -712,9 +759,9 @@ class FeatureSelector(BaseEstimator):
                 run_params,
                 train_data,
                 num_boost_round=200,
-                valid_sets=[val_data],
+                valid_sets=[val_data],  # فقط validation set (md1.md بخش 1.3)
                 callbacks=[
-                    lgb.early_stopping(stopping_rounds=30, verbose=False),
+                    lgb.early_stopping(stopping_rounds=30, verbose=False),  # LightGBM 4.0+ syntax (md1.md بخش 1.4)
                     lgb.log_evaluation(period=0)
                 ]
             )
@@ -799,7 +846,12 @@ class FeatureSelector(BaseEstimator):
             
             X_sample = X_sample.iloc[:, feature_indices]
             
-            train_data = lgb.Dataset(X_sample, label=y_sample, weight=weights_sample, free_raw_data=False)
+            # two_round loading (md1.md بخش 4.2)
+            train_data = lgb.Dataset(
+                X_sample, label=y_sample, weight=weights_sample,
+                params={'two_round': True},
+                free_raw_data=False
+            )
             
             run_params = params.copy()
             run_params['random_state'] = self.random_state + i
@@ -809,7 +861,7 @@ class FeatureSelector(BaseEstimator):
                 run_params,
                 train_data,
                 num_boost_round=150,
-                callbacks=[lgb.log_evaluation(period=0)]
+                callbacks=[lgb.log_evaluation(period=0)]  # LightGBM 4.0+ syntax (md1.md بخش 1.4)
             )
             
             gain_importance = model.feature_importance(importance_type='gain')
