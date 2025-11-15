@@ -1,7 +1,11 @@
 feature
-tickvol
-low
-close
-high
-open
-spread
+high__mean_change
+high__time_reversal_asymmetry_statistic__lag_1
+high__time_reversal_asymmetry_statistic__lag_2
+high__time_reversal_asymmetry_statistic__lag_3
+high__mean_second_derivative_central
+high__last_location_of_maximum
+high__cid_ce__normalize_True
+high__autocorrelation__lag_3
+high__autocorrelation__lag_5
+high__autocorrelation__lag_6

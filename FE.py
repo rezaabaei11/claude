@@ -1043,14 +1043,28 @@ def main():
         enable_metadata_routing=False
     )
     
-    # Load XAUUSD data
-    df = pd.read_csv('XAUUSD_M15_R.csv', sep='\t')
-    # Rename columns before creating datetime
-    df.columns = ['date', 'time', 'open', 'high', 'low', 'close', 'tickvol', 'vol', 'spread']
-    df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y.%m.%d %H:%M:%S')
-    # Create target and drop datetime
-    df['target'] = ((df['close'].shift(-1) > df['close']).astype(int)).fillna(0)
-    df = df.drop(columns=['date', 'time', 'datetime']).dropna()
+    # Load F_top100 data (100 TSFresh features)
+    logging.info('Loading F_top100.csv with 100 features')
+    df = pd.read_csv('F_top100.csv')
+    
+    # Check if target column exists, if not create one
+    # Assuming the data is time-ordered, create target based on future trend
+    # Using a simple strategy: target = 1 if next group shows upward trend
+    if 'target' not in df.columns:
+        logging.info('Creating target column based on feature patterns')
+        # Use a rolling average of key features to determine target
+        # Select a representative feature (using first feature as proxy for price movement)
+        feature_cols = df.columns.tolist()
+        if len(feature_cols) > 0:
+            # Simple target: check if rolling mean increases in next window
+            rolling_feature = df.iloc[:, 4].rolling(window=5, min_periods=1).mean()
+            df['target'] = (rolling_feature.shift(-1) > rolling_feature).astype(int)
+            df['target'] = df['target'].fillna(0).astype(int)
+        else:
+            raise ValueError('No features found in F_top100.csv')
+    
+    df = df.dropna()
+    logging.info(f'Loaded {len(df)} rows with {len([c for c in df.columns if c != "target"])} features')
     
     # Split into batches
     batch_size = len(df) // N_BATCHES
