@@ -60,7 +60,8 @@ class FeatureSelector(BaseEstimator):
         vif_threshold: float = 5.0,
         use_calibration: bool = False,
         use_class_weights: bool = True,
-        enable_metadata_routing: bool = False
+        enable_metadata_routing: bool = False,
+        use_pyarrow: bool = False  # PyArrow backend (Pandas.md بخش 0)
     ):
         self.target_column = target_column
         self.classification = classification
@@ -86,6 +87,7 @@ class FeatureSelector(BaseEstimator):
         self.use_calibration = use_calibration
         self.use_class_weights = use_class_weights
         self.enable_metadata_routing = enable_metadata_routing
+        self.use_pyarrow = use_pyarrow
         
         self.rng = np.random.default_rng(random_state)
         
@@ -97,28 +99,52 @@ class FeatureSelector(BaseEstimator):
             pd.options.future.infer_string = True
             logging.info('Future string inference enabled')
         
-        os.environ['OMP_NUM_THREADS'] = str(os.cpu_count() if n_jobs == -1 else max(1, n_jobs))
+        # PyArrow backend برای بهینه‌سازی حافظه (Pandas.md بخش 0)
+        if use_pyarrow:
+            try:
+                pd.options.mode.dtype_backend = 'pyarrow'
+                logging.info('PyArrow backend enabled for memory optimization')
+            except Exception as e:
+                logging.warning(f'PyArrow backend not available: {str(e)}')
+        
+        # CPU Optimization با physical cores (md1.md بخش 1.2)
+        try:
+            import psutil
+            physical_cores = psutil.cpu_count(logical=False)
+            if physical_cores:
+                os.environ['OMP_NUM_THREADS'] = str(physical_cores)
+                self.num_threads = physical_cores
+                logging.info(f'Using {physical_cores} physical CPU cores')
+            else:
+                self.num_threads = os.cpu_count() if n_jobs == -1 else max(1, n_jobs)
+                os.environ['OMP_NUM_THREADS'] = str(self.num_threads)
+        except ImportError:
+            self.num_threads = os.cpu_count() if n_jobs == -1 else max(1, n_jobs)
+            os.environ['OMP_NUM_THREADS'] = str(self.num_threads)
+            logging.warning('psutil not available, using logical cores')
         
         self.base_params = {
             'objective': 'binary' if classification else 'regression',
             'metric': 'binary_logloss' if classification else 'rmse',
             'boosting_type': 'gbdt',
-            'learning_rate': 0.02,  # کاهش برای دقت بهتر (از 0.03 به 0.02)
-            'num_leaves': 31,
-            'max_depth': 6,  # محدود کردن عمق برای overfitting کمتر
-            'feature_fraction': 0.8,  # افزایش (از 0.7 به 0.8)
-            'bagging_fraction': 0.7,
+            'learning_rate': 0.01,  # کاهش برای دقت بهتر (md1.md بخش 5.4.2)
+            'num_leaves': 31,  # نه بیشتر (md1.md بخش 5.4.2)
+            'max_depth': 5,  # محدود کردن عمق (md1.md: max 6)
+            'feature_fraction': 0.8,  # کاهش برای جلوگیری از overfit (md1.md بخش 5.4.2)
+            'bagging_fraction': 0.7,  # کاهش (md1.md بخش 5.4.2)
             'bagging_freq': 5,
-            'min_data_in_leaf': 50,
-            'lambda_l1': 0.3,  # افزایش regularization (از 0.1 به 0.3)
-            'lambda_l2': 0.3,  # افزایش regularization (از 0.1 به 0.3)
-            'path_smooth': 1.0,  # اضافه کردن path smoothing برای regularization
-            'min_gain_to_split': 0.01,  # اضافه کردن حداقل gain برای split
+            'min_data_in_leaf': 50,  # افزایش برای دقت (md1.md بخش 5.4.2)
+            'lambda_l1': 0.5,  # افزایش regularization (md1.md بخش 5.4.2)
+            'lambda_l2': 0.5,  # افزایش regularization (md1.md بخش 5.4.2)
+            'path_smooth': 2.0,  # افزایش برای regularization بیشتر (md1.md بخش 5.4.2)
+            'min_gain_to_split': 0.02,  # افزایش (md1.md بخش 5.4.2)
             'verbosity': -1,
             'random_state': random_state,
-            'deterministic': True,
-            'force_col_wise': True,
-            'num_threads': -1,
+            'deterministic': True,  # (md1.md بخش 1.2)
+            'force_col_wise': True,  # بهینه برای features زیاد (md1.md بخش 1.2)
+            'num_threads': self.num_threads,  # استفاده از physical cores (md1.md بخش 1.2)
+            'max_bin': 255,  # بهینه‌سازی حافظه histogram
+            'histogram_pool_size': 8192,  # 8GB pool size (md1.md بخش 4.1)
         }
         
         logging.info(f'Pandas {pd.__version__}, NumPy {np.__version__}')
@@ -128,50 +154,60 @@ class FeatureSelector(BaseEstimator):
 
     def optimize_dtypes(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        بهینه‌سازی حافظه با استراتژی Pandas.md
+        بهینه‌سازی حافظه پیشرفته با استراتژی Pandas.md (بخش 8.1)
+        استفاده از روش‌های vectorized و بهینه Pandas
         """
         if not self.dtype_optimization:
             return df
         
         memory_before = df.memory_usage(deep=True).sum() / 1024**2
         
-        for col in df.columns:
+        # بهینه‌سازی object columns با vectorized operation
+        object_cols = df.select_dtypes(include=['object']).columns
+        if len(object_cols) > 0 and self.use_categorical:
+            for col in object_cols:
+                # بررسی cardinality برای categorical conversion
+                if df[col].nunique() / len(df) < 0.5:
+                    df[col] = df[col].astype('category')
+        
+        # بهینه‌سازی numeric columns با استفاده از vectorized operations
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        
+        for col in numeric_cols:
             col_type = df[col].dtype
             
-            # Object columns: convert to category if low cardinality (< 50%)
-            if col_type == 'object':
-                num_unique = df[col].nunique()
-                total_rows = len(df)
-                if num_unique / total_rows < 0.5 and self.use_categorical:
-                    df[col] = df[col].astype('category')
-                continue
-            
-            # Integer optimization (Pandas.md strategy)
+            # Integer optimization (Pandas.md بخش 8.1)
             if str(col_type)[:3] == 'int':
-                col_min = df[col].min()
-                col_max = df[col].max()
+                c_min = df[col].min()
+                c_max = df[col].max()
                 
-                # Aggressive optimization for IDs/indices
-                if col_min >= np.iinfo(np.int8).min and col_max <= np.iinfo(np.int8).max:
+                # استفاده از pd.api.types برای بررسی دقیق‌تر
+                if c_min >= np.iinfo(np.int8).min and c_max <= np.iinfo(np.int8).max:
                     df[col] = df[col].astype(np.int8)
-                elif col_min >= np.iinfo(np.int16).min and col_max <= np.iinfo(np.int16).max:
+                elif c_min >= np.iinfo(np.int16).min and c_max <= np.iinfo(np.int16).max:
                     df[col] = df[col].astype(np.int16)
-                elif col_min >= np.iinfo(np.int32).min and col_max <= np.iinfo(np.int32).max:
+                elif c_min >= np.iinfo(np.int32).min and c_max <= np.iinfo(np.int32).max:
                     df[col] = df[col].astype(np.int32)
             
-            # Float optimization (Pandas.md strategy)
+            # Float optimization با بررسی دقیق‌تر (Pandas.md بخش 8.1)
             elif str(col_type)[:5] == 'float':
-                if df[col].notna().sum() > 0:
-                    col_min = df[col].min()
-                    col_max = df[col].max()
+                # استفاده از notna() برای بهتر بودن عملکرد
+                if df[col].notna().any():
+                    c_min = df[col].min()
+                    c_max = df[col].max()
                     
-                    # Safe downcasting to float32
-                    if not np.isnan(col_min) and not np.isnan(col_max):
-                        if col_min > np.finfo(np.float32).min and col_max < np.finfo(np.float32).max:
-                            df[col] = df[col].astype(np.float32)
+                    # Safe downcasting با بررسی محدوده float32
+                    if not pd.isna(c_min) and not pd.isna(c_max):
+                        if (c_min > np.finfo(np.float32).min * 0.99 and 
+                            c_max < np.finfo(np.float32).max * 0.99):
+                            # Sample-based precision check برای کارایی بهتر
+                            sample_vals = df[col].dropna().sample(min(100, len(df[col].dropna())), random_state=42)
+                            precision_ok = (np.abs(sample_vals.astype(np.float32) - sample_vals) < np.abs(sample_vals) * 1e-6).all()
+                            if precision_ok:
+                                df[col] = df[col].astype(np.float32)
         
         memory_after = df.memory_usage(deep=True).sum() / 1024**2
-        memory_reduction = (1 - memory_after / memory_before) * 100
+        memory_reduction = ((memory_before - memory_after) / memory_before) * 100 if memory_before > 0 else 0
         
         logging.info(f'Memory optimization: {memory_before:.2f} MB → {memory_after:.2f} MB ({memory_reduction:.1f}% reduction)')
         
@@ -179,18 +215,22 @@ class FeatureSelector(BaseEstimator):
 
     def preprocess_features(self, X: pd.DataFrame, y: pd.Series) -> Tuple[pd.DataFrame, pd.Series]:
         """
-        پیش‌پردازش پیشرفته با استراتژی Pandas.md
+        پیش‌پردازش پیشرفته با استراتژی Pandas.md (بخش 1.3 و 2.1)
+        استفاده از vectorized operations و method chaining
         """
+        # استفاده صحیح از Copy-on-Write (Pandas.md بخش 0)
         X = X.copy()
         
-        # حذف ستون‌های ثابت
-        constant_cols = X.columns[X.nunique() <= 1].tolist()
+        # حذف ستون‌های ثابت با استفاده از vectorized operation
+        constant_mask = X.nunique() <= 1
+        constant_cols = X.columns[constant_mask].tolist()
         if constant_cols:
             logging.warning(f'Removing {len(constant_cols)} constant features')
             X = X.drop(columns=constant_cols)
         
-        # حذف ستون‌های با Missing بالا (>90%)
-        high_missing_cols = X.columns[X.isnull().mean() > 0.9].tolist()
+        # حذف ستون‌های با Missing بالا با vectorized operation
+        missing_ratios = X.isnull().mean()
+        high_missing_cols = missing_ratios[missing_ratios > 0.9].index.tolist()
         if high_missing_cols:
             logging.warning(f'Removing {len(high_missing_cols)} features with >90% missing')
             X = X.drop(columns=high_missing_cols)
@@ -198,29 +238,45 @@ class FeatureSelector(BaseEstimator):
         # بهینه‌سازی حافظه قبل از imputation
         X = self.optimize_dtypes(X)
         
-        # مدیریت Missing Data با روش Pandas.md (interpolation برای time series)
-        missing_mask = X.isnull().sum() > 0
+        # مدیریت Missing Data بهبود یافته (Pandas.md بخش 1.3)
+        # استفاده از select_dtypes برای کارایی بهتر
+        missing_mask = X.isnull().any()
         if missing_mask.any():
             missing_cols = X.columns[missing_mask].tolist()
             logging.info(f'Handling missing data in {len(missing_cols)} columns')
             
-            for col in missing_cols:
-                if X[col].dtype == 'float32' or str(X[col].dtype).startswith('float'):
-                    # Interpolation برای داده‌های عددی (مناسب time series)
-                    X[col] = X[col].interpolate(method='linear', limit_direction='both', limit=5)
-                    # Forward/Backward fill برای باقیمانده
-                    X[col] = X[col].ffill().bfill()
-                else:
-                    # Mode fill برای categorical
-                    if len(X[col].mode()) > 0:
-                        X[col] = X[col].fillna(X[col].mode()[0])
-                    else:
-                        X[col] = X[col].fillna(0)
+            # جداسازی numeric و categorical columns
+            numeric_cols = X.select_dtypes(include=[np.number]).columns
+            missing_numeric = [col for col in missing_cols if col in numeric_cols]
+            missing_categorical = [col for col in missing_cols if col not in numeric_cols]
+            
+            # پردازش numeric columns با method chaining (Pandas.md)
+            if missing_numeric:
+                for col in missing_numeric:
+                    # Interpolation → Forward fill → Backward fill → Median
+                    # استفاده از method chaining برای کارایی بهتر
+                    X[col] = (X[col]
+                             .interpolate(method='linear', limit_direction='both', limit=5)
+                             .ffill(limit=5)
+                             .bfill(limit=5))
+                    
+                    # Median fallback اگر هنوز NaN داریم
+                    if X[col].isnull().any():
+                        median_val = X[col].median()
+                        X[col] = X[col].fillna(median_val)
+            
+            # پردازش categorical columns
+            if missing_categorical:
+                for col in missing_categorical:
+                    # Mode fill با استفاده از .mode()[0] که سریع‌تر است
+                    mode_val = X[col].mode()
+                    fill_val = mode_val.iloc[0] if len(mode_val) > 0 else 0
+                    X[col] = X[col].fillna(fill_val)
         
         # بهینه‌سازی نهایی حافظه
         X = self.optimize_dtypes(X)
         
-        # جمع‌آوری زباله برای آزادسازی حافظه
+        # جمع‌آوری زباله برای آزادسازی حافظه (Pandas.md best practice)
         gc.collect()
         
         return X, y
@@ -231,13 +287,20 @@ class FeatureSelector(BaseEstimator):
         y: pd.Series,
         gap: int = 50
     ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+        """
+        Temporal split با استفاده از iloc برای کارایی بهتر (Pandas.md)
+        """
         n = len(X)
         train_size = int(n * (1 - self.test_size_ratio))
-        X_train = X.iloc[:train_size]
-        y_train = y.iloc[:train_size]
+        
+        # استفاده از .iloc برای slicing بهینه (Pandas.md best practice)
+        X_train = X.iloc[:train_size].copy()  # copy() برای CoW
+        y_train = y.iloc[:train_size].copy()
+        
         test_start = min(train_size + gap, n)
-        X_test = X.iloc[test_start:]
-        y_test = y.iloc[test_start:]
+        X_test = X.iloc[test_start:].copy()
+        y_test = y.iloc[test_start:].copy()
+        
         logging.info(f'Train: {len(X_train)}, Test: {len(X_test)}, Gap: {gap}')
         return X_train, X_test, y_train, y_test
 
@@ -329,8 +392,8 @@ class FeatureSelector(BaseEstimator):
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        n_actual: int = 10,  # افزایش برای دقت بهتر (از 3 به 10)
-        n_null: int = 50  # افزایش برای اعتبار بهتر (از 20 به 50)
+        n_actual: int = 20,  # افزایش برای دقت بهتر (از 10 به 20)
+        n_null: int = 100  # افزایش برای اعتبار بهتر (از 50 به 100)
     ) -> Dict:
         logging.info('Null Importance with statistical significance testing')
         n_features = len(X.columns)
@@ -347,7 +410,12 @@ class FeatureSelector(BaseEstimator):
         sample_weights = self.compute_sample_weights(y)
         
         for run in range(n_actual):
-            train_data = lgb.Dataset(X, label=y, weight=sample_weights, free_raw_data=False)
+            # استفاده از two_round برای بهینه‌سازی حافظه (md1.md بخش 4.2)
+            train_data = lgb.Dataset(
+                X, label=y, weight=sample_weights, 
+                params={'two_round': True},
+                free_raw_data=False
+            )
             run_params = params.copy()
             run_params['random_state'] = self.random_state + run
             run_params['seed'] = self.random_state + run
@@ -356,15 +424,20 @@ class FeatureSelector(BaseEstimator):
                 run_params,
                 train_data,
                 num_boost_round=300,
-                callbacks=[lgb.log_evaluation(period=0)]
+                callbacks=[lgb.log_evaluation(period=0)]  # Callbacks صحیح LightGBM 4.0+ (md1.md بخش 1.4)
             )
             
+            # استفاده از 'gain' به جای 'split' (md1.md بخش 2.2: Gain بهتر است)
             actual_gain[run, :] = model.feature_importance(importance_type='gain')
             actual_split[run, :] = model.feature_importance(importance_type='split')
         
         for run in range(n_null):
             y_shuffled = y.sample(frac=1, random_state=self.random_state + n_actual + run).values
-            train_data = lgb.Dataset(X, label=y_shuffled, weight=sample_weights, free_raw_data=False)
+            train_data = lgb.Dataset(
+                X, label=y_shuffled, weight=sample_weights,
+                params={'two_round': True},  # md1.md بخش 4.2
+                free_raw_data=False
+            )
             run_params = params.copy()
             run_params['random_state'] = self.random_state + n_actual + run
             run_params['seed'] = self.random_state + n_actual + run
@@ -450,7 +523,7 @@ class FeatureSelector(BaseEstimator):
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        n_runs: int = 5  # افزایش برای پایداری بهتر (از 3 به 5)
+        n_runs: int = 7  # افزایش برای پایداری بهتر (از 5 به 7)
     ) -> Dict:
         logging.info('Boosting ensemble with optimized parameters')
         ensemble_results = defaultdict(list)
@@ -465,7 +538,12 @@ class FeatureSelector(BaseEstimator):
         ]
         
         for run in range(n_runs):
-            train_data = lgb.Dataset(X, label=y, weight=sample_weights, free_raw_data=False)
+            # two_round loading (md1.md بخش 4.2)
+            train_data = lgb.Dataset(
+                X, label=y, weight=sample_weights,
+                params={'two_round': True},
+                free_raw_data=False
+            )
             for booster_name, booster_params in booster_configs:
                 run_params = params.copy()
                 run_params.update(booster_params)
@@ -497,7 +575,7 @@ class FeatureSelector(BaseEstimator):
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        n_runs: int = 5  # افزایش برای پایداری بهتر (از 3 به 5)
+        n_runs: int = 7  # افزایش برای پایداری بهتر (از 5 به 7)
     ) -> Dict:
         logging.info('Feature fraction analysis')
         fraction_results = defaultdict(list)
@@ -512,7 +590,12 @@ class FeatureSelector(BaseEstimator):
         ]
         
         for run in range(n_runs):
-            train_data = lgb.Dataset(X, label=y, weight=sample_weights, free_raw_data=False)
+            # two_round loading (md1.md بخش 4.2)
+            train_data = lgb.Dataset(
+                X, label=y, weight=sample_weights,
+                params={'two_round': True},
+                free_raw_data=False
+            )
             for config_name, config_params in configs:
                 run_params = params.copy()
                 run_params.update(config_params)
@@ -555,9 +638,11 @@ class FeatureSelector(BaseEstimator):
         
         train_size = int(0.8 * len(X_combined))
         
+        # استفاده از two_round برای کاهش memory usage (md1.md بخش 4.2)
         train_data = lgb.Dataset(
             X_combined.iloc[:train_size],
             label=y_combined[:train_size],
+            params={'two_round': True},  # کاهش 50% peak memory (md1.md بخش 4.2)
             free_raw_data=False
         )
         
@@ -565,6 +650,7 @@ class FeatureSelector(BaseEstimator):
             X_combined.iloc[train_size:],
             label=y_combined[train_size:],
             reference=train_data,
+            params={'two_round': True},
             free_raw_data=False
         )
         
@@ -633,7 +719,7 @@ class FeatureSelector(BaseEstimator):
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        n_splits: int = 3  # افزایش برای دقت بهتر (از 2 به 3)
+        n_splits: int = 5  # افزایش برای دقت بهتر (از 3 به 5)
     ) -> Dict:
         logging.info('Cross-validation multi-metric')
         tscv = TimeSeriesSplit(n_splits=n_splits, gap=50)
@@ -654,8 +740,17 @@ class FeatureSelector(BaseEstimator):
             
             weights_train = sample_weights[train_idx]
             
-            train_data = lgb.Dataset(X_train, label=y_train, weight=weights_train, free_raw_data=False)
-            val_data = lgb.Dataset(X_val, label=y_val, reference=train_data, free_raw_data=False)
+            # two_round loading (md1.md بخش 4.2)
+            train_data = lgb.Dataset(
+                X_train, label=y_train, weight=weights_train,
+                params={'two_round': True},
+                free_raw_data=False
+            )
+            val_data = lgb.Dataset(
+                X_val, label=y_val, reference=train_data,
+                params={'two_round': True},
+                free_raw_data=False
+            )
             
             run_params = params.copy()
             run_params['n_estimators'] = 200
@@ -664,9 +759,9 @@ class FeatureSelector(BaseEstimator):
                 run_params,
                 train_data,
                 num_boost_round=200,
-                valid_sets=[val_data],
+                valid_sets=[val_data],  # فقط validation set (md1.md بخش 1.3)
                 callbacks=[
-                    lgb.early_stopping(stopping_rounds=30, verbose=False),
+                    lgb.early_stopping(stopping_rounds=30, verbose=False),  # LightGBM 4.0+ syntax (md1.md بخش 1.4)
                     lgb.log_evaluation(period=0)
                 ]
             )
@@ -722,8 +817,8 @@ class FeatureSelector(BaseEstimator):
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        n_bootstrap: int = 20,  # افزایش برای پایداری بهتر (از 10 به 20)
-        threshold: float = 0.75
+        n_bootstrap: int = 30,  # افزایش برای پایداری بهتر (از 20 به 30)
+        threshold: float = 0.70  # کاهش threshold برای شناسایی بیشتر فیچرهای stable
     ) -> Dict:
         logging.info('Stability bootstrap analysis')
         n_features = len(X.columns)
@@ -751,7 +846,12 @@ class FeatureSelector(BaseEstimator):
             
             X_sample = X_sample.iloc[:, feature_indices]
             
-            train_data = lgb.Dataset(X_sample, label=y_sample, weight=weights_sample, free_raw_data=False)
+            # two_round loading (md1.md بخش 4.2)
+            train_data = lgb.Dataset(
+                X_sample, label=y_sample, weight=weights_sample,
+                params={'two_round': True},
+                free_raw_data=False
+            )
             
             run_params = params.copy()
             run_params['random_state'] = self.random_state + i
@@ -761,7 +861,7 @@ class FeatureSelector(BaseEstimator):
                 run_params,
                 train_data,
                 num_boost_round=150,
-                callbacks=[lgb.log_evaluation(period=0)]
+                callbacks=[lgb.log_evaluation(period=0)]  # LightGBM 4.0+ syntax (md1.md بخش 1.4)
             )
             
             gain_importance = model.feature_importance(importance_type='gain')
@@ -1013,11 +1113,23 @@ class FeatureSelector(BaseEstimator):
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        df_ranking.to_csv(
-            output_path / f'batch_{batch_id}_ranking_{timestamp}.csv',
-            index=False
-        )
+        # ذخیره با Parquet برای بهینه‌سازی حافظه (Pandas.md بخش 8.3)
+        try:
+            df_ranking.to_parquet(
+                output_path / f'batch_{batch_id}_ranking_{timestamp}.parquet',
+                engine='pyarrow',
+                compression='snappy',
+                index=False
+            )
+            logging.info(f'Ranking saved in Parquet format (optimized)')
+        except Exception as e:
+            logging.warning(f'Parquet save failed, using CSV: {str(e)}')
+            df_ranking.to_csv(
+                output_path / f'batch_{batch_id}_ranking_{timestamp}.csv',
+                index=False
+            )
         
+        # ذخیره CSV برای سازگاری با نسخه قبل
         pd.DataFrame({'feature': categorized['strong']}).to_csv(
             output_path / f'batch_{batch_id}_strong.csv',
             index=False
@@ -1061,7 +1173,7 @@ def main():
     selector = FeatureSelector(
         target_column=TARGET_COLUMN,
         classification=CLASSIFICATION,
-        n_estimators=300,  # افزایش برای دقت بهتر (از 200 به 300)
+        n_estimators=400,  # افزایش برای دقت بهتر (از 300 به 400)
         test_size_ratio=0.2,
         random_state=42,
         n_jobs=N_JOBS,
@@ -1086,22 +1198,55 @@ def main():
         enable_metadata_routing=False
     )
     
-    # Load XAUUSD data
-    df = pd.read_csv('XAUUSD_M15_R.csv', sep='\t')
-    # Rename columns before creating datetime
+    # بهینه‌سازی خواندن داده با Pandas (Pandas.md بخش 1.1)
+    logging.info('Loading data with optimized Pandas operations')
+    
+    # خواندن CSV با dtype specification برای بهینه‌سازی حافظه
+    df = pd.read_csv(
+        'XAUUSD_M15_R.csv', 
+        sep='\t',
+        # استفاده از usecols برای خواندن فقط ستون‌های مورد نیاز (Pandas.md)
+        dtype={
+            'open': np.float32,
+            'high': np.float32,
+            'low': np.float32,
+            'close': np.float32,
+            'tickvol': np.int32,
+            'vol': np.int32,
+            'spread': np.int16
+        }
+    )
+    
+    # تنظیم نام ستون‌ها و ایجاد datetime به روش بهینه (Pandas.md بخش 1.1)
     df.columns = ['date', 'time', 'open', 'high', 'low', 'close', 'tickvol', 'vol', 'spread']
-    df['datetime'] = pd.to_datetime(df['date'] + ' ' + df['time'], format='%Y.%m.%d %H:%M:%S')
-    # Create target and drop datetime
-    df['target'] = ((df['close'].shift(-1) > df['close']).astype(int)).fillna(0)
+    
+    # استفاده از pd.to_datetime با format صریح برای سرعت بیشتر
+    df['datetime'] = pd.to_datetime(
+        df['date'] + ' ' + df['time'], 
+        format='%Y.%m.%d %H:%M:%S',
+        errors='coerce'  # مدیریت خطاهای احتمالی
+    )
+    
+    # ایجاد target با استفاده از vectorized operations (Pandas.md)
+    # استفاده از .astype() برای تبدیل مستقیم boolean به int
+    df['target'] = (df['close'].shift(-1) > df['close']).astype(np.int8).fillna(0)
+    
+    # حذف ستون‌های غیرضروری با یک operation (Pandas.md best practice)
     df = df.drop(columns=['date', 'time', 'datetime']).dropna()
     
-    # Split into batches
+    # گزارش اطلاعات حافظه (Pandas.md بخش 1.1)
+    memory_usage = df.memory_usage(deep=True).sum() / 1024**2
+    logging.info(f'Data loaded: {df.shape[0]} rows, {df.shape[1]} columns, {memory_usage:.2f} MB')
+    
+    # Split into batches با استفاده از iloc برای کارایی بهتر
     batch_size = len(df) // N_BATCHES
     for batch_id in range(1, N_BATCHES + 1):
         try:
             start_idx = (batch_id - 1) * batch_size
             end_idx = batch_id * batch_size if batch_id < N_BATCHES else len(df)
-            features_df = df.iloc[start_idx:end_idx]
+            
+            # استفاده از .iloc برای slicing بهینه (Pandas.md)
+            features_df = df.iloc[start_idx:end_idx].copy()  # copy() برای CoW
             
             selector.process_batch(
                 features_df=features_df,

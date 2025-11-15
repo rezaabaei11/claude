@@ -1,7 +1,7 @@
 feature
 tickvol
-low
 close
-open
-spread
 high
+low
+spread
+open

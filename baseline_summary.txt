@@ -1,0 +1,20 @@
+نتایج اجرای Baseline FE.py
+================================
+
+نقاط ضعف شناسایی شده در md1.md:
+1. دقت پایین (mean_cv_score: ~0.51 - تقریباً مثل random)
+2. فیچرهای significant بسیار کم (0-1 فیچر از 6 فیچر)
+3. stability پایین فیچرها (0-2 فیچر stable)
+4. زمان اجرا: ~12 ثانیه per batch
+5. مصرف حافظه: ~10 MB per batch
+
+بهبودهای پیشنهادی از md1.md:
+1. افزایش n_actual در null importance (از 10 به 20)
+2. افزایش n_null در null importance (از 50 به 100)
+3. افزایش cv_splits (از 3 به 5)
+4. افزایش n_bootstrap در stability (از 20 به 30)
+5. کاهش learning_rate برای دقت بهتر (از 0.02 به 0.01)
+6. افزایش regularization (lambda_l1 و lambda_l2)
+7. استفاده از permutation importance
+8. افزایش n_runs در boosting ensemble
+9. محدود کردن max_depth برای overfitting کمتر
