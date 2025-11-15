@@ -1,12 +1,12 @@
 {
     "batch_id": 4,
-    "timestamp": "20251115_171019",
+    "timestamp": "20251115_172434",
     "n_total": 6,
     "n_strong": 6,
     "n_medium": 0,
     "n_weak": 3,
     "mean_cv_score": 0.5122112211221121,
     "std_cv_score": 0.005592195831524247,
-    "execution_time_sec": 18.621334552764893,
-    "memory_used_mb": 0.0
+    "execution_time_sec": 19.769428491592407,
+    "memory_used_mb": 0.2265625
 }

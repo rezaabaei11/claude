@@ -60,7 +60,8 @@ class FeatureSelector(BaseEstimator):
         vif_threshold: float = 5.0,
         use_calibration: bool = False,
         use_class_weights: bool = True,
-        enable_metadata_routing: bool = False
+        enable_metadata_routing: bool = False,
+        use_pyarrow: bool = False  # PyArrow backend (Pandas.md بخش 0)
     ):
         self.target_column = target_column
         self.classification = classification
@@ -86,6 +87,7 @@ class FeatureSelector(BaseEstimator):
         self.use_calibration = use_calibration
         self.use_class_weights = use_class_weights
         self.enable_metadata_routing = enable_metadata_routing
+        self.use_pyarrow = use_pyarrow
         
         self.rng = np.random.default_rng(random_state)
         
@@ -97,28 +99,37 @@ class FeatureSelector(BaseEstimator):
             pd.options.future.infer_string = True
             logging.info('Future string inference enabled')
         
+        # PyArrow backend برای بهینه‌سازی حافظه (Pandas.md بخش 0)
+        if use_pyarrow:
+            try:
+                pd.options.mode.dtype_backend = 'pyarrow'
+                logging.info('PyArrow backend enabled for memory optimization')
+            except Exception as e:
+                logging.warning(f'PyArrow backend not available: {str(e)}')
+        
         os.environ['OMP_NUM_THREADS'] = str(os.cpu_count() if n_jobs == -1 else max(1, n_jobs))
         
         self.base_params = {
             'objective': 'binary' if classification else 'regression',
             'metric': 'binary_logloss' if classification else 'rmse',
             'boosting_type': 'gbdt',
-            'learning_rate': 0.01,  # کاهش برای دقت بهتر (از 0.02 به 0.01)
+            'learning_rate': 0.01,  # کاهش برای دقت بهتر
             'num_leaves': 31,
-            'max_depth': 5,  # محدود کردن عمق برای overfitting کمتر (از 6 به 5)
-            'feature_fraction': 0.8,  # افزایش (از 0.7 به 0.8)
+            'max_depth': 5,  # محدود کردن عمق برای overfitting کمتر
+            'feature_fraction': 0.8,
             'bagging_fraction': 0.7,
             'bagging_freq': 5,
             'min_data_in_leaf': 50,
-            'lambda_l1': 0.5,  # افزایش regularization (از 0.3 به 0.5)
-            'lambda_l2': 0.5,  # افزایش regularization (از 0.3 به 0.5)
-            'path_smooth': 1.0,  # اضافه کردن path smoothing برای regularization
-            'min_gain_to_split': 0.01,  # اضافه کردن حداقل gain برای split
+            'lambda_l1': 0.5,  # افزایش regularization
+            'lambda_l2': 0.5,  # افزایش regularization
+            'path_smooth': 1.0,  # اضافه کردن path smoothing (Pandas.md بخش 3.2)
+            'min_gain_to_split': 0.01,  # حداقل gain برای split
             'verbosity': -1,
             'random_state': random_state,
             'deterministic': True,
-            'force_col_wise': True,
+            'force_col_wise': True,  # بهینه برای features زیاد (Pandas.md بخش 4.2)
             'num_threads': -1,
+            'max_bin': 255,  # بهینه‌سازی حافظه histogram (Pandas.md توصیه)
         }
         
         logging.info(f'Pandas {pd.__version__}, NumPy {np.__version__}')
@@ -128,7 +139,7 @@ class FeatureSelector(BaseEstimator):
 
     def optimize_dtypes(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        بهینه‌سازی حافظه با استراتژی Pandas.md
+        بهینه‌سازی حافظه پیشرفته با استراتژی Pandas.md (بخش 8.1)
         """
         if not self.dtype_optimization:
             return df
@@ -146,29 +157,35 @@ class FeatureSelector(BaseEstimator):
                     df[col] = df[col].astype('category')
                 continue
             
-            # Integer optimization (Pandas.md strategy)
+            # Integer optimization با دقت بیشتر (Pandas.md بخش 8.1)
             if str(col_type)[:3] == 'int':
                 col_min = df[col].min()
                 col_max = df[col].max()
                 
-                # Aggressive optimization for IDs/indices
+                # بهینه‌سازی تهاجمی برای int
                 if col_min >= np.iinfo(np.int8).min and col_max <= np.iinfo(np.int8).max:
                     df[col] = df[col].astype(np.int8)
                 elif col_min >= np.iinfo(np.int16).min and col_max <= np.iinfo(np.int16).max:
                     df[col] = df[col].astype(np.int16)
                 elif col_min >= np.iinfo(np.int32).min and col_max <= np.iinfo(np.int32).max:
                     df[col] = df[col].astype(np.int32)
+                # else keep int64
             
-            # Float optimization (Pandas.md strategy)
+            # Float optimization با بررسی دقیق‌تر (Pandas.md بخش 8.1)
             elif str(col_type)[:5] == 'float':
                 if df[col].notna().sum() > 0:
                     col_min = df[col].min()
                     col_max = df[col].max()
                     
-                    # Safe downcasting to float32
+                    # Safe downcasting به float32 با بررسی دقیق range
                     if not np.isnan(col_min) and not np.isnan(col_max):
-                        if col_min > np.finfo(np.float32).min and col_max < np.finfo(np.float32).max:
-                            df[col] = df[col].astype(np.float32)
+                        # بررسی اینکه آیا داده‌ها در محدوده float32 هستند
+                        if (col_min > np.finfo(np.float32).min * 0.99 and 
+                            col_max < np.finfo(np.float32).max * 0.99):
+                            # بررسی precision loss
+                            test_val = df[col].iloc[0] if len(df) > 0 else 0
+                            if abs(np.float32(test_val) - test_val) < abs(test_val) * 1e-6:
+                                df[col] = df[col].astype(np.float32)
         
         memory_after = df.memory_usage(deep=True).sum() / 1024**2
         memory_reduction = (1 - memory_after / memory_before) * 100
@@ -179,7 +196,7 @@ class FeatureSelector(BaseEstimator):
 
     def preprocess_features(self, X: pd.DataFrame, y: pd.Series) -> Tuple[pd.DataFrame, pd.Series]:
         """
-        پیش‌پردازش پیشرفته با استراتژی Pandas.md
+        پیش‌پردازش پیشرفته با استراتژی Pandas.md (بخش 1.3 و 2.1)
         """
         X = X.copy()
         
@@ -198,7 +215,7 @@ class FeatureSelector(BaseEstimator):
         # بهینه‌سازی حافظه قبل از imputation
         X = self.optimize_dtypes(X)
         
-        # مدیریت Missing Data با روش Pandas.md (interpolation برای time series)
+        # مدیریت Missing Data بهبود یافته (Pandas.md بخش 1.3)
         missing_mask = X.isnull().sum() > 0
         if missing_mask.any():
             missing_cols = X.columns[missing_mask].tolist()
@@ -206,10 +223,20 @@ class FeatureSelector(BaseEstimator):
             
             for col in missing_cols:
                 if X[col].dtype == 'float32' or str(X[col].dtype).startswith('float'):
-                    # Interpolation برای داده‌های عددی (مناسب time series)
-                    X[col] = X[col].interpolate(method='linear', limit_direction='both', limit=5)
-                    # Forward/Backward fill برای باقیمانده
-                    X[col] = X[col].ffill().bfill()
+                    # Interpolation برای داده‌های عددی (Pandas.md توصیه time-based)
+                    X[col] = X[col].interpolate(
+                        method='linear', 
+                        limit_direction='both', 
+                        limit=5
+                    )
+                    # Forward fill برای باقیمانده
+                    X[col] = X[col].ffill(limit=5)
+                    # Backward fill برای اول فایل
+                    X[col] = X[col].bfill(limit=5)
+                    # اگر هنوز NaN داریم، با median پر کن
+                    if X[col].isnull().any():
+                        median_val = X[col].median()
+                        X[col] = X[col].fillna(median_val)
                 else:
                     # Mode fill برای categorical
                     if len(X[col].mode()) > 0:
@@ -1013,11 +1040,23 @@ class FeatureSelector(BaseEstimator):
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        df_ranking.to_csv(
-            output_path / f'batch_{batch_id}_ranking_{timestamp}.csv',
-            index=False
-        )
+        # ذخیره با Parquet برای بهینه‌سازی حافظه (Pandas.md بخش 8.3)
+        try:
+            df_ranking.to_parquet(
+                output_path / f'batch_{batch_id}_ranking_{timestamp}.parquet',
+                engine='pyarrow',
+                compression='snappy',
+                index=False
+            )
+            logging.info(f'Ranking saved in Parquet format (optimized)')
+        except Exception as e:
+            logging.warning(f'Parquet save failed, using CSV: {str(e)}')
+            df_ranking.to_csv(
+                output_path / f'batch_{batch_id}_ranking_{timestamp}.csv',
+                index=False
+            )
         
+        # ذخیره CSV برای سازگاری با نسخه قبل
         pd.DataFrame({'feature': categorized['strong']}).to_csv(
             output_path / f'batch_{batch_id}_strong.csv',
             index=False
