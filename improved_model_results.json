@@ -1,0 +1,30 @@
+{
+  "comparison": {
+    "optimized_rf": {
+      "train_accuracy": 0.7242807825086306,
+      "test_accuracy": 0.6790953545232273,
+      "accuracy_gap": 0.04518542798540326,
+      "train_auc": 0.8040128405468091,
+      "test_auc": 0.7500594886784145,
+      "auc_gap": 0.05395335186839456
+    },
+    "tuned_rf": {
+      "train_accuracy": 0.7694668200997314,
+      "test_accuracy": 0.6769559902200489,
+      "accuracy_gap": 0.09251082987968251,
+      "train_auc": 0.8519170565753603,
+      "test_auc": 0.7540515068903816,
+      "auc_gap": 0.09786554968497874
+    },
+    "gradient_boosting": {
+      "train_accuracy": 0.7739930955120828,
+      "test_accuracy": 0.6980440097799511,
+      "accuracy_gap": 0.07594908573213177,
+      "train_auc": 0.8543231509335469,
+      "test_auc": 0.775913736732151,
+      "auc_gap": 0.07840941420139591
+    }
+  },
+  "best_strategy": "optimized_rf",
+  "best_gap": 0.04518542798540326
+}
