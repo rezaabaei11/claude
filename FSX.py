@@ -240,7 +240,6 @@ class FeatureSelector(BaseEstimator):
             'min_data_in_bin': 5,
             'histogram_pool_size': None,
             'min_sum_hessian_in_leaf': 1.0,
-            'early_stopping_rounds': 50,  # FIXED: Added early stopping to prevent overfitting
         }
         logging.info(f'Pandas {pd.__version__}, NumPy {np.__version__}')
         self._validate_tree_params()
@@ -298,7 +297,6 @@ class FeatureSelector(BaseEstimator):
             'data_random_seed': random_state,
             'max_bin': 255,
             'min_data_in_bin': 5,
-            'early_stopping_rounds': 50,  # FIXED: Early stopping for overfitting prevention
             'histogram_pool_size': None,
             'min_sum_hessian_in_leaf': 1.0,
         }
@@ -1431,6 +1429,7 @@ class FeatureSelector(BaseEstimator):
                     run_params,
                     train_data,
                     num_boost_round=num_rounds,
+                    valid_sets=None,
                     callbacks=[lgb.log_evaluation(period=0)]
                 )
                 gain = model.feature_importance(importance_type='gain')
