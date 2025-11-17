@@ -1,0 +1,196 @@
+{
+  "metadata": {
+    "total_samples": 16357,
+    "total_features": 15,
+    "strong_features": 15,
+    "feature_names": [
+      "high__mean_second_derivative_central",
+      "high__first_location_of_minimum",
+      "high__last_location_of_minimum",
+      "high__mean_change",
+      "high__last_location_of_maximum",
+      "high__time_reversal_asymmetry_statistic__lag_2",
+      "high__first_location_of_maximum",
+      "high__autocorrelation__lag_1",
+      "high__time_reversal_asymmetry_statistic__lag_3",
+      "high__time_reversal_asymmetry_statistic__lag_1",
+      "high__kurtosis",
+      "high__skewness",
+      "high__autocorrelation__lag_8",
+      "high__autocorrelation__lag_4",
+      "high__mean_abs_change"
+    ],
+    "timestamp": "2025-11-17T16:50:51.958568"
+  },
+  "training": {
+    "accuracy": 0.7212074894917845,
+    "auc": 0.8040007301657368,
+    "precision": 0.7606866374957927,
+    "recall": 0.6700266824785058,
+    "f1": 0.712484237074401
+  },
+  "validation": {
+    "accuracy": 0.6830684596577017,
+    "auc": 0.7599029444553741,
+    "precision": 0.7302543507362784,
+    "recall": 0.6324637681159421,
+    "f1": 0.6778502640571606
+  },
+  "predictions": {},
+  "accuracy_gap": 0.038139029834082794,
+  "walk_forward_validation": {
+    "folds": [
+      {
+        "fold": 0,
+        "train_size": 8178,
+        "test_size": 1635,
+        "accuracy": 0.6844036697247706,
+        "auc": 0.7611274673101107,
+        "precision": 0.7309236947791165,
+        "recall": 0.6341463414634146,
+        "f1": 0.6791044776119403
+      },
+      {
+        "fold": 1,
+        "train_size": 9813,
+        "test_size": 1635,
+        "accuracy": 0.6972477064220184,
+        "auc": 0.7657161771930455,
+        "precision": 0.7271540469973891,
+        "recall": 0.66073546856465,
+        "f1": 0.692355500310752
+      },
+      {
+        "fold": 2,
+        "train_size": 11448,
+        "test_size": 1635,
+        "accuracy": 0.6966360856269113,
+        "auc": 0.7651330378599026,
+        "precision": 0.714095744680851,
+        "recall": 0.656479217603912,
+        "f1": 0.6840764331210191
+      },
+      {
+        "fold": 3,
+        "train_size": 13083,
+        "test_size": 1635,
+        "accuracy": 0.6862385321100918,
+        "auc": 0.762359145123569,
+        "precision": 0.7285513361462729,
+        "recall": 0.6181384248210023,
+        "f1": 0.6688185926404132
+      }
+    ],
+    "accuracy_mean": 0.691131498470948,
+    "accuracy_std": 0.00585049739134831,
+    "auc_mean": 0.7635839568716569
+  },
+  "signals": {
+    "total_signals": 3272,
+    "distribution": {
+      "NEUTRAL": 1487,
+      "STRONG_BUY": 641,
+      "BUY": 286,
+      "STRONG_SELL": 377,
+      "SELL": 481
+    },
+    "sample_signals": [
+      {
+        "index": 0,
+        "signal": "NEUTRAL",
+        "probability": 0.5090901348252992,
+        "confidence": 0.5
+      },
+      {
+        "index": 1,
+        "signal": "NEUTRAL",
+        "probability": 0.5351357121799059,
+        "confidence": 0.5
+      },
+      {
+        "index": 2,
+        "signal": "STRONG_BUY",
+        "probability": 0.7099124592864618,
+        "confidence": 0.7099124592864618
+      },
+      {
+        "index": 3,
+        "signal": "BUY",
+        "probability": 0.6639883964874439,
+        "confidence": 0.6639883964874439
+      },
+      {
+        "index": 4,
+        "signal": "STRONG_SELL",
+        "probability": 0.2587427551189746,
+        "confidence": 0.7412572448810254
+      },
+      {
+        "index": 5,
+        "signal": "STRONG_SELL",
+        "probability": 0.2652214688517287,
+        "confidence": 0.7347785311482713
+      },
+      {
+        "index": 6,
+        "signal": "NEUTRAL",
+        "probability": 0.588772340973937,
+        "confidence": 0.5
+      },
+      {
+        "index": 7,
+        "signal": "NEUTRAL",
+        "probability": 0.4595613850960412,
+        "confidence": 0.5
+      },
+      {
+        "index": 8,
+        "signal": "STRONG_SELL",
+        "probability": 0.19703538000716467,
+        "confidence": 0.8029646199928353
+      },
+      {
+        "index": 9,
+        "signal": "STRONG_SELL",
+        "probability": 0.1884090218511862,
+        "confidence": 0.8115909781488138
+      }
+    ]
+  },
+  "feature_importance": {
+    "features": [
+      "high__first_location_of_minimum",
+      "high__mean_second_derivative_central",
+      "high__last_location_of_minimum",
+      "high__first_location_of_maximum",
+      "high__last_location_of_maximum",
+      "high__mean_change",
+      "high__time_reversal_asymmetry_statistic__lag_3",
+      "high__time_reversal_asymmetry_statistic__lag_2",
+      "high__time_reversal_asymmetry_statistic__lag_1",
+      "high__autocorrelation__lag_1",
+      "high__skewness",
+      "high__kurtosis",
+      "high__autocorrelation__lag_8",
+      "high__autocorrelation__lag_4",
+      "high__mean_abs_change"
+    ],
+    "importances": [
+      0.2068898448332686,
+      0.1918525779739431,
+      0.17809341952975868,
+      0.0982007986951085,
+      0.08653364850613089,
+      0.04901854632279386,
+      0.03127533319551731,
+      0.029518196676742898,
+      0.028210691936853043,
+      0.025032197986780844,
+      0.019634064647293007,
+      0.015360416019548774,
+      0.013839403579164897,
+      0.013477703003562913,
+      0.013063157093532746
+    ]
+  }
+}
