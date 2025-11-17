@@ -1,0 +1,217 @@
+{
+  "summary": {
+    "total_tests": 6,
+    "passed_tests": 3,
+    "failed_tests": 3,
+    "test_details": {
+      "learning_curves": {
+        "passed": false,
+        "checks": {
+          "train_accuracy_improves": "False",
+          "val_accuracy_improves": "True",
+          "reasonable_gap": "False",
+          "converging": "True"
+        }
+      },
+      "train_test_gap": {
+        "passed": false,
+        "checks": {
+          "small_accuracy_gap": false,
+          "small_auc_gap": false,
+          "decent_test_performance": true,
+          "test_not_worse": false
+        }
+      },
+      "cv_consistency": {
+        "passed": true,
+        "checks": {
+          "low_cv_variance": "True",
+          "no_extreme_outliers": "True",
+          "min_score_reasonable": "True",
+          "low_cv_coefficient": "True"
+        }
+      },
+      "model_complexity": {
+        "passed": false,
+        "checks": {
+          "sufficient_samples": true,
+          "model_params_reasonable": false,
+          "feature_dimensionality_ok": true,
+          "feature_importance_distributed": "True"
+        }
+      },
+      "feature_stability": {
+        "passed": true,
+        "checks": {
+          "stable_features": true,
+          "consistent_top_features": true,
+          "features_not_all_equal": "True"
+        }
+      },
+      "bootstrap_stability": {
+        "passed": true,
+        "checks": {
+          "low_prediction_variance": "True",
+          "stable_scores": "True",
+          "reasonable_max_variance": "True"
+        }
+      }
+    },
+    "overall_status": "OVERFITTING DETECTED"
+  },
+  "detailed_results": {
+    "learning_curves": {
+      "passed": false,
+      "checks": {
+        "train_accuracy_improves": "False",
+        "val_accuracy_improves": "True",
+        "reasonable_gap": "False",
+        "converging": "True"
+      },
+      "details": [
+        "\u26a0 Training accuracy doesn't improve",
+        "\u2713 Validation accuracy improves",
+        "\u26a0 Large gap: 0.2800",
+        "\u2713 Curves converging (gap decreases)"
+      ],
+      "train_sizes": [
+        0.1,
+        0.2285714285714286,
+        0.3571428571428572,
+        0.48571428571428577,
+        0.6142857142857143,
+        0.7428571428571429,
+        0.8714285714285716,
+        1.0
+      ],
+      "train_scores": [
+        0.9990403071017274,
+        0.9991607217792698,
+        0.9959720730397422,
+        0.990523198420533,
+        0.980015612802498,
+        0.9762458042860831,
+        0.9679762297788049,
+        0.9666283084004603
+      ],
+      "val_scores": [
+        0.6432681242807825,
+        0.607211354046797,
+        0.6586114307633295,
+        0.6651323360184119,
+        0.616800920598389,
+        0.6689681626390487,
+        0.6839278864595321,
+        0.6866129650939777
+      ]
+    },
+    "train_test_gap": {
+      "passed": false,
+      "checks": {
+        "small_accuracy_gap": false,
+        "small_auc_gap": false,
+        "decent_test_performance": true,
+        "test_not_worse": false
+      },
+      "metrics": {
+        "train_accuracy": 0.9535864978902954,
+        "test_accuracy": 0.6781784841075794,
+        "accuracy_gap": 0.27540801378271595,
+        "train_auc": 0.9925622077098707,
+        "test_auc": 0.7498503883158615,
+        "auc_gap": 0.2427118193940092
+      },
+      "details": [
+        "\u2717 Large accuracy gap: 0.2754",
+        "\u2717 Large AUC gap: 0.2427",
+        "\u2713 Test accuracy decent: 0.6782",
+        "\u26a0 Test much worse than train"
+      ]
+    },
+    "cv_consistency": {
+      "passed": true,
+      "checks": {
+        "low_cv_variance": "True",
+        "no_extreme_outliers": "True",
+        "min_score_reasonable": "True",
+        "low_cv_coefficient": "True"
+      },
+      "cv_scores": [
+        0.641804788213628,
+        0.6556169429097606,
+        0.6325966850828729,
+        0.6353591160220995,
+        0.6947513812154696
+      ],
+      "cv_stats": {
+        "mean": 0.6520257826887661,
+        "std": 0.022795216782543697,
+        "min": 0.6325966850828729,
+        "max": 0.6947513812154696,
+        "range": 0.06215469613259672
+      },
+      "details": [
+        "\u2713 Low CV variance: 0.0228",
+        "\u2713 No extreme outliers (range=0.0622)",
+        "\u2713 Minimum score reasonable: 0.6326",
+        "\u2713 Low CV coefficient: 0.0350"
+      ]
+    },
+    "model_complexity": {
+      "passed": false,
+      "checks": {
+        "sufficient_samples": true,
+        "model_params_reasonable": false,
+        "feature_dimensionality_ok": true,
+        "feature_importance_distributed": "True"
+      },
+      "metrics": {
+        "n_samples": 13035,
+        "n_features": 100,
+        "samples_per_feature": 130.35
+      },
+      "details": [
+        "\u2713 Sufficient samples: 130.35 per feature",
+        "\u2717 Model too complex for data",
+        "\u2713 Feature dimensionality OK (100/13035)",
+        "\u2713 Feature importance distributed"
+      ]
+    },
+    "feature_stability": {
+      "passed": true,
+      "checks": {
+        "stable_features": true,
+        "consistent_top_features": true,
+        "features_not_all_equal": "True"
+      },
+      "details": [
+        "\u2713 Most top features stable (70%+)",
+        "\u2713 Consistent top features: 9",
+        "\u2713 Features vary in importance"
+      ],
+      "top_features": {
+        "total_in_top10": 11,
+        "stable_features": 10
+      }
+    },
+    "bootstrap_stability": {
+      "passed": true,
+      "checks": {
+        "low_prediction_variance": "True",
+        "stable_scores": "True",
+        "reasonable_max_variance": "True"
+      },
+      "metrics": {
+        "pred_std_mean": 0.053989101825461815,
+        "pred_std_max": 0.1224566522206737,
+        "score_mean": 0.7369376852190149,
+        "score_std": 0.005886850832664976
+      },
+      "details": [
+        "\u2713 Low prediction variance: 0.0540",
+        "\u2713 Stable scores (std=0.0059)",
+        "\u2713 Max variance reasonable: 0.1225"
+      ]
+    }
+  }
+}

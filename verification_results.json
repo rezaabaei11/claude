@@ -1,0 +1,23 @@
+{
+  "timestamp": "2025-11-17T15:35:09.411738",
+  "original": {
+    "train_accuracy": 0.9563622468475353,
+    "test_accuracy": 0.6830684596577017,
+    "accuracy_gap": 0.27329378718983366,
+    "train_auc": 0.9936149316741754,
+    "test_auc": 0.7495663415868019,
+    "auc_gap": 0.24404859008737345
+  },
+  "improved": {
+    "train_accuracy": 0.7225831104317921,
+    "test_accuracy": 0.6775672371638142,
+    "accuracy_gap": 0.04501587326797796,
+    "train_auc": 0.8052739367920234,
+    "test_auc": 0.7475892564383613,
+    "auc_gap": 0.05768468035366214
+  },
+  "improvements": {
+    "accuracy_gap_reduction_percent": 83.52839494418902,
+    "auc_gap_reduction_percent": 76.36344453659409
+  }
+}
