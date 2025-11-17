@@ -1,0 +1,112 @@
+{
+  "summary": {
+    "total_tests": 6,
+    "passed_tests": 5,
+    "failed_tests": 1,
+    "test_details": {
+      "temporal_consistency": {
+        "passed": true,
+        "checks": {
+          "no_overlap": true,
+          "temporal_order": "True",
+          "train_chronological": "True",
+          "gap_exists": "True"
+        }
+      },
+      "target_leakage": {
+        "passed": true,
+        "checks": {
+          "binary_target": true,
+          "target_balance": "True",
+          "forward_looking": "True"
+        }
+      },
+      "feature_leakage": {
+        "passed": true,
+        "checks": {
+          "no_suspicious_features": true,
+          "feature_importance_diversity": "True",
+          "permutation_importance": "True"
+        }
+      },
+      "distribution_consistency": {
+        "passed": false,
+        "checks": {
+          "no_significant_drift": "False",
+          "mean_consistency": "False",
+          "variance_consistency": "False"
+        }
+      },
+      "walk_forward_validation": {
+        "passed": true,
+        "checks": {
+          "reasonable_performance": "True",
+          "cv_stability": "True",
+          "no_overfitting": "True",
+          "no_performance_degradation": "True"
+        }
+      },
+      "feature_significance": {
+        "passed": true,
+        "checks": {
+          "real_better_than_permuted": "True",
+          "statistically_significant": "True",
+          "meaningful_effect_size": "True"
+        }
+      }
+    },
+    "overall_status": "NEEDS REVIEW"
+  },
+  "detailed_results": {
+    "temporal_consistency": {
+      "passed": true,
+      "checks": {
+        "no_overlap": true,
+        "temporal_order": "True",
+        "train_chronological": "True",
+        "gap_exists": "True"
+      }
+    },
+    "target_leakage": {
+      "passed": true,
+      "checks": {
+        "binary_target": true,
+        "target_balance": "True",
+        "forward_looking": "True"
+      }
+    },
+    "feature_leakage": {
+      "passed": true,
+      "checks": {
+        "no_suspicious_features": true,
+        "feature_importance_diversity": "True",
+        "permutation_importance": "True"
+      }
+    },
+    "distribution_consistency": {
+      "passed": false,
+      "checks": {
+        "no_significant_drift": "False",
+        "mean_consistency": "False",
+        "variance_consistency": "False"
+      }
+    },
+    "walk_forward_validation": {
+      "passed": true,
+      "checks": {
+        "reasonable_performance": "True",
+        "cv_stability": "True",
+        "no_overfitting": "True",
+        "no_performance_degradation": "True"
+      }
+    },
+    "feature_significance": {
+      "passed": true,
+      "checks": {
+        "real_better_than_permuted": "True",
+        "statistically_significant": "True",
+        "meaningful_effect_size": "True"
+      }
+    }
+  }
+}
