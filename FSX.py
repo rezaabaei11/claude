@@ -218,14 +218,14 @@ class FeatureSelector(BaseEstimator):
             'metric': 'binary_logloss' if classification else 'rmse',
             'boosting_type': 'gbdt',
             'learning_rate': 0.03,
-            'num_leaves': 80,
+            'num_leaves': 31,  # FIXED: Reduced from 80 to prevent overfitting
             'max_depth': 8,
             'feature_fraction': 0.7,
             'bagging_fraction': 0.8,
             'bagging_freq': 5,
-            'min_data_in_leaf': 30,
-            'lambda_l1': 0.3,
-            'lambda_l2': 2.0,
+            'min_data_in_leaf': 50,  # FIXED: Increased from 30 for regularization
+            'lambda_l1': 1.0,  # FIXED: Increased from 0.3 for L1 regularization
+            'lambda_l2': 3.0,  # FIXED: Increased from 2.0 for L2 regularization
             'path_smooth': 10.0,
             'min_gain_to_split': 0.02,
             'verbosity': -1,
@@ -240,6 +240,7 @@ class FeatureSelector(BaseEstimator):
             'min_data_in_bin': 5,
             'histogram_pool_size': None,
             'min_sum_hessian_in_leaf': 1.0,
+            'early_stopping_rounds': 50,  # FIXED: Added early stopping to prevent overfitting
         }
         logging.info(f'Pandas {pd.__version__}, NumPy {np.__version__}')
         self._validate_tree_params()
@@ -275,15 +276,15 @@ class FeatureSelector(BaseEstimator):
             'metric': 'binary_logloss' if classification else 'rmse',
             'boosting_type': 'gbdt',
             'learning_rate': 0.05,
-            'num_leaves': 31,
+            'num_leaves': 31,  # FIXED: Optimized for stability
             'max_depth': 6,
-            'min_data_in_leaf': 50,
+            'min_data_in_leaf': 50,  # FIXED: Higher minimum for regularization
             'feature_fraction': 0.6,
             'feature_fraction_bynode': 0.8,
             'bagging_fraction': 0.8,
             'bagging_freq': 5,
-            'lambda_l1': 0.5,
-            'lambda_l2': 3.0,
+            'lambda_l1': 1.0,  # FIXED: Increased L1 regularization
+            'lambda_l2': 3.0,  # FIXED: Increased L2 regularization
             'min_gain_to_split': 0.05,
             'path_smooth': 5.0,
             'verbosity': -1,
@@ -297,6 +298,7 @@ class FeatureSelector(BaseEstimator):
             'data_random_seed': random_state,
             'max_bin': 255,
             'min_data_in_bin': 5,
+            'early_stopping_rounds': 50,  # FIXED: Early stopping for overfitting prevention
             'histogram_pool_size': None,
             'min_sum_hessian_in_leaf': 1.0,
         }

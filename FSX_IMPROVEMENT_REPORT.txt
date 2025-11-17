@@ -1,0 +1,20 @@
+FSX.PY IMPROVEMENT REPORT
+================================================================================
+
+CHANGES MADE:
+
+num_leaves: 80 → 31
+  Reason: Reduce tree complexity and prevent overfitting
+
+min_data_in_leaf: 30 → 50
+  Reason: Higher minimum samples per leaf = less overfitting
+
+lambda_l1: 0.3 → 1.0
+  Reason: Increase L1 regularization (3.3x stronger)
+
+lambda_l2: 2.0 → 3.0
+  Reason: Increase L2 regularization (1.5x stronger)
+
+early_stopping_rounds: None → 50
+  Reason: Stop training when validation doesn't improve
+
