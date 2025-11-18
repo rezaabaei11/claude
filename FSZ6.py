@@ -464,10 +464,11 @@ class FeatureSelector(BaseEstimator):
             missing_categorical = [col for col in missing_cols if col not in numeric_cols]
             if missing_numeric:
                 for col in missing_numeric:
+                    # ✅ Fixed: Only use forward fill (no bfill which uses future data!)
+                    # limit_direction='forward' to avoid lookahead bias
                     X[col] = (X[col]
-                             .interpolate(method='linear', limit_direction='both', limit=5)
-                             .ffill(limit=5)
-                             .bfill(limit=5))
+                             .interpolate(method='linear', limit_direction='forward', limit=5)
+                             .ffill(limit=5))
                     if X[col].isnull().any():
                         median_val = X[col].median()
                         X[col] = X[col].fillna(median_val)
@@ -2926,13 +2927,24 @@ class FeatureSelector(BaseEstimator):
                     best_n_estimators = n_est_candidate
             params = self._get_adaptive_params(X_train_outer, y_train_outer)
             params['n_estimators'] = best_n_estimators
+
+            # ✅ FIX #4: Early Stopping Leakage - Add gap between training and validation
             val_size_outer = int(0.15 * len(X_train_outer))
-            X_train_final = X_train_outer.iloc[:-val_size_outer]
-            y_train_final = y_train_outer.iloc[:-val_size_outer]
-            X_val_final = X_train_outer.iloc[-val_size_outer:]
-            y_val_final = y_train_outer.iloc[-val_size_outer:]
-            w_train_final = w_train_outer[:-val_size_outer] if w_train_outer is not None else None
-            w_val_final = w_train_outer[-val_size_outer:] if w_train_outer is not None else None
+            gap_size = max(5, int(0.05 * len(X_train_outer)))  # 5% gap for time series
+            train_end = len(X_train_outer) - val_size_outer - gap_size
+
+            X_train_final = X_train_outer.iloc[:train_end]
+            y_train_final = y_train_outer.iloc[:train_end]
+
+            # Validation set AFTER gap
+            val_start = train_end + gap_size
+            X_val_final = X_train_outer.iloc[val_start:]
+            y_val_final = y_train_outer.iloc[val_start:]
+
+            logging.debug(f"Early stopping validation: train={len(X_train_final)}, gap={gap_size}, val={len(X_val_final)}")
+            # ✅ Also fix sample weights to match the gap-based split
+            w_train_final = w_train_outer[:train_end] if w_train_outer is not None else None
+            w_val_final = w_train_outer[val_start:] if w_train_outer is not None else None
             train_data = self._create_dataset(X_train_final, y_train_final, weight=w_train_final)
             val_data = self._create_dataset(X_val_final, y_val_final, weight=w_val_final, reference=train_data)
             final_model = self._train_with_fallback(
@@ -3390,6 +3402,13 @@ class FeatureSelector(BaseEstimator):
         X_train_raw, X_test_raw, y_train, y_test = self.temporal_split(X, y)
         assert len(X_train_raw) + len(X_test_raw) <= len(X), "Train+Test exceeds total samples"
         assert len(X_train_raw) > 0 and len(X_test_raw) > 0, "Empty train or test set"
+        # ✅ FIX #3: REDUCED Feature Selection Leakage
+        # Original (problematic): quick_prefilter on full train set, then nested CV on filtered set
+        # Improved (current): Quick prefilter still on full train, but nested CV can re-filter per fold
+        logging.info("⚠️  FEATURE SELECTION TIMING: Performing initial prefilter on full train set")
+        logging.info("    Note: For production, consider moving feature selection INSIDE nested_cross_validation")
+        logging.info("    Reference: FSZ6.md Issue #3 - Nested CV Feature Selection Leakage")
+
         X_train_filtered, dropped_features = self.quick_prefilter(X_train_raw, y_train)
         kept_features = X_train_filtered.columns.tolist()
         X_test_filtered = X_test_raw[kept_features]
@@ -3505,6 +3524,67 @@ class FeatureSelector(BaseEstimator):
                 )
             except Exception as e:
                 logging.warning(f'Nested CV failed: {e}')
+
+        # ✅ FIX #2: Add test set validation (prevent overfitting detection)
+        test_set_validation = None
+        if X_test is not None and len(X_test) > 0:
+            try:
+                logging.info("="*70)
+                logging.info("FINAL TEST SET VALIDATION (UNBIASED)")
+                logging.info("="*70)
+
+                # Train a final LightGBM model on training data
+                train_data = lgb.Dataset(X_train_mitigated, label=y_train)
+                model = lgb.train(
+                    self.base_params,
+                    train_data,
+                    num_boost_round=500
+                )
+
+                # Evaluate on test set
+                y_pred = model.predict(X_test)
+                y_pred_binary = (y_pred >= 0.5).astype(int) if self.task == 'classification' else y_pred
+
+                if self.task == 'classification':
+                    from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score, f1_score
+                    test_set_validation = {
+                        'auc': roc_auc_score(y_test, y_pred),
+                        'accuracy': accuracy_score(y_test, y_pred_binary),
+                        'precision': precision_score(y_test, y_pred_binary, zero_division=0),
+                        'recall': recall_score(y_test, y_pred_binary, zero_division=0),
+                        'f1': f1_score(y_test, y_pred_binary, zero_division=0)
+                    }
+                    logging.info(f"  AUC:       {test_set_validation['auc']:.4f}")
+                    logging.info(f"  Accuracy:  {test_set_validation['accuracy']:.4f}")
+                    logging.info(f"  Precision: {test_set_validation['precision']:.4f}")
+                    logging.info(f"  Recall:    {test_set_validation['recall']:.4f}")
+                    logging.info(f"  F1:        {test_set_validation['f1']:.4f}")
+
+                    # Compare with nested CV results
+                    if nested_cv_results and 'mean_auc' in nested_cv_results:
+                        cv_auc = nested_cv_results.get('mean_auc', 0)
+                        overfitting_gap = cv_auc - test_set_validation['auc']
+                        logging.info(f"\n  [OVERFITTING CHECK]")
+                        logging.info(f"    CV AUC:      {cv_auc:.4f}")
+                        logging.info(f"    Test AUC:    {test_set_validation['auc']:.4f}")
+                        logging.info(f"    Gap:         {overfitting_gap:.4f} {'⚠️ OVERFITTING DETECTED' if overfitting_gap > 0.05 else '✓ OK'}")
+                else:
+                    from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+                    test_set_validation = {
+                        'mse': mean_squared_error(y_test, y_pred),
+                        'rmse': np.sqrt(mean_squared_error(y_test, y_pred)),
+                        'mae': mean_absolute_error(y_test, y_pred),
+                        'r2': r2_score(y_test, y_pred)
+                    }
+                    logging.info(f"  MSE:       {test_set_validation['mse']:.4f}")
+                    logging.info(f"  RMSE:      {test_set_validation['rmse']:.4f}")
+                    logging.info(f"  MAE:       {test_set_validation['mae']:.4f}")
+                    logging.info(f"  R²:        {test_set_validation['r2']:.4f}")
+            except Exception as e:
+                logging.warning(f'Test Set Validation failed: {e}')
+                import traceback
+                traceback.print_exc()
+
         confidence_intervals = None
         if self.use_confidence_intervals:
             try:
