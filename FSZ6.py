@@ -3453,6 +3453,124 @@ class FeatureSelector(BaseEstimator):
                 'cv_importance_cv': cv_importance_cv_threshold
             }
         }
+
+    def compute_adaptive_ensemble_weights(
+        self,
+        df: pd.DataFrame,
+        default_fallback: bool = False
+    ) -> Dict[str, float]:
+        """
+        ✅ FIX #11: Compute data-driven ensemble weights based on metric characteristics
+
+        Instead of hardcoded weights, this calculates weights from:
+        1. Variance of each metric (higher variance = more discriminatory)
+        2. Discrimination power (IQR: Q75-Q25)
+        3. Remove highly correlated metrics (r > 0.95)
+
+        According to FSZ6.md Issue #11 recommendations
+        """
+        logging.info("="*70)
+        logging.info("COMPUTING ADAPTIVE ENSEMBLE WEIGHTS")
+        logging.info("="*70)
+
+        # Get score columns (exclude 'feature')
+        score_cols = [col for col in df.columns if col != 'feature']
+
+        if len(score_cols) == 0:
+            logging.warning("No score columns found!")
+            return {}
+
+        # Numeric data
+        score_matrix = df[score_cols].fillna(0).values
+
+        # 1. Detect highly correlated metrics
+        if len(score_cols) > 1:
+            corr_matrix = np.corrcoef(score_matrix.T)
+            high_corr_pairs = []
+            redundant_cols = set()
+
+            for i in range(len(score_cols)):
+                for j in range(i+1, len(score_cols)):
+                    corr = abs(corr_matrix[i, j])
+                    if corr > 0.95:
+                        high_corr_pairs.append((score_cols[i], score_cols[j], corr))
+                        # Remove lower variance metric
+                        var_i = np.var(score_matrix[:, i])
+                        var_j = np.var(score_matrix[:, j])
+                        if var_i < var_j:
+                            redundant_cols.add(score_cols[i])
+                        else:
+                            redundant_cols.add(score_cols[j])
+
+            if high_corr_pairs:
+                logging.info(f"Detected {len(high_corr_pairs)} highly correlated metric pairs:")
+                for col1, col2, corr in high_corr_pairs[:5]:
+                    logging.info(f"  {col1} <-> {col2}: r={corr:.3f}")
+                if len(high_corr_pairs) > 5:
+                    logging.info(f"  ... and {len(high_corr_pairs)-5} more")
+
+            # Filter to non-redundant columns
+            effective_cols = [col for col in score_cols if col not in redundant_cols]
+            if not effective_cols:
+                effective_cols = score_cols
+
+            logging.info(f"Removed {len(redundant_cols)} redundant metrics, using {len(effective_cols)} metrics")
+        else:
+            effective_cols = score_cols
+
+        # 2. Calculate variance and discrimination for each metric
+        metric_weights = {}
+
+        for col in effective_cols:
+            col_idx = score_cols.index(col)
+            col_data = score_matrix[:, col_idx]
+
+            # Variance (dispersion)
+            variance = np.var(col_data)
+
+            # Discrimination power (IQR)
+            q75 = np.percentile(col_data, 75)
+            q25 = np.percentile(col_data, 25)
+            discrimination = q75 - q25
+
+            # Information score = variance × discrimination
+            info_score = variance * max(discrimination, 1e-6)
+
+            metric_weights[col] = info_score
+
+            logging.debug(f"{col:30s}: var={variance:.4f}, disc={discrimination:.4f}, info={info_score:.6f}")
+
+        if not metric_weights:
+            logging.warning("Could not compute any metric weights!")
+            if default_fallback:
+                return self.normalize_weights({col: 1.0 for col in score_cols})
+            return {}
+
+        # 3. Normalize weights to sum to 1.0
+        total = sum(metric_weights.values())
+        if total <= 0:
+            logging.warning("Total weight is non-positive!")
+            if default_fallback:
+                return self.normalize_weights({col: 1.0 for col in metric_weights.keys()})
+            return metric_weights
+
+        normalized_weights = {col: w/total for col, w in metric_weights.items()}
+
+        # Ensure all expected columns have weights (even if 0)
+        for col in score_cols:
+            if col not in normalized_weights:
+                normalized_weights[col] = 0.0
+
+        logging.info(f"\nAdaptive weights computed for {len(metric_weights)} metrics:")
+        for col, weight in sorted(normalized_weights.items(), key=lambda x: x[1], reverse=True)[:10]:
+            if weight > 0:
+                logging.info(f"  {col:30s}: {weight:.4f}")
+
+        logging.info(f"Total weight sum: {sum(normalized_weights.values()):.10f}")
+        logging.info(f"{'-'*70}")
+
+        return normalized_weights
+
     @staticmethod
     def normalize_weights(weights_dict: Dict[str, float]) -> Dict[str, float]:
         total = sum(weights_dict.values())
@@ -3539,21 +3657,34 @@ class FeatureSelector(BaseEstimator):
                 col_name = key.replace('_gain_mean', '_f').replace('_split_mean', '_fs')
                 score_data[col_name] = self.normalize_with_stability(feature_fraction[key])
         df = pd.DataFrame(score_data)
-        weights_raw = {
-            'null_z': 0.08, 'null_z_split': 0.03, 'null_sig': 0.02, 'null_sig_split': 0.01,
-            'above_99': 0.03, 'above_95': 0.02, 'goss': 0.03, 'goss_s': 0.01, 'dart': 0.03,
-            'dart_s': 0.01, 'extra': 0.03, 'extra_s': 0.01, 'bynode_f': 0.02, 'bynode_fs': 0.01,
-            'bytree_f': 0.02, 'bytree_fs': 0.01, 'combined_f': 0.02, 'combined_fs': 0.01,
-            'adv_shift': 0.02, 'no_shift': 0.01, 'rfe_sel': 0.03, 'rfe_rank': 0.02,
-            'cv_g': 0.06, 'cv_s': 0.03, 'cv_p': 0.06, 'cv_stab_g': 0.02, 'cv_stab_s': 0.01,
-            'stab_g': 0.03, 'stab_s': 0.02, 'is_stab_g': 0.02, 'is_stab_s': 0.01, 'shap': 0.08,
-            'shap_int': 0.03, 'mult_corr_pen': 0.02,
-            'mi_score': 0.04, 'mi_high': 0.02,
-            'stab_sel_prob': 0.05, 'stab_sel_stable': 0.03,
-            'nested_cv_imp': 0.06, 'nested_cv_stab': 0.03,
-            'ci_mean': 0.04, 'ci_certainty': 0.03, 'ci_significant': 0.02
-        }
-        weights = self.normalize_weights(weights_raw)
+
+        # ✅ FIX #11: Compute data-driven ensemble weights instead of hardcoded
+        # Weights should be based on:
+        # 1. Variance/discrimination of each metric
+        # 2. Remove highly correlated metrics (r > 0.95)
+        # 3. Weight by information content (variance × discrimination)
+        try:
+            weights = self.compute_adaptive_ensemble_weights(df, default_fallback=True)
+            logging.info("Using data-driven adaptive ensemble weights")
+        except Exception as e:
+            logging.warning(f"Adaptive weight computation failed: {e}, using default weights")
+            # Fallback to hardcoded defaults if adaptive fails
+            weights_raw = {
+                'null_z': 0.08, 'null_z_split': 0.03, 'null_sig': 0.02, 'null_sig_split': 0.01,
+                'above_99': 0.03, 'above_95': 0.02, 'goss': 0.03, 'goss_s': 0.01, 'dart': 0.03,
+                'dart_s': 0.01, 'extra': 0.03, 'extra_s': 0.01, 'bynode_f': 0.02, 'bynode_fs': 0.01,
+                'bytree_f': 0.02, 'bytree_fs': 0.01, 'combined_f': 0.02, 'combined_fs': 0.01,
+                'adv_shift': 0.02, 'no_shift': 0.01, 'rfe_sel': 0.03, 'rfe_rank': 0.02,
+                'cv_g': 0.06, 'cv_s': 0.03, 'cv_p': 0.06, 'cv_stab_g': 0.02, 'cv_stab_s': 0.01,
+                'stab_g': 0.03, 'stab_s': 0.02, 'is_stab_g': 0.02, 'is_stab_s': 0.01, 'shap': 0.08,
+                'shap_int': 0.03, 'mult_corr_pen': 0.02,
+                'mi_score': 0.04, 'mi_high': 0.02,
+                'stab_sel_prob': 0.05, 'stab_sel_stable': 0.03,
+                'nested_cv_imp': 0.06, 'nested_cv_stab': 0.03,
+                'ci_mean': 0.04, 'ci_certainty': 0.03, 'ci_significant': 0.02
+            }
+            weights = self.normalize_weights(weights_raw)
+            logging.warning("Using hardcoded default weights (not adaptive)")
         logging.info(f"Ensemble weights normalized: sum={sum(weights.values()):.10f}")
         score_cols = [col for col in df.columns if col != 'feature']
         score_matrix = df[score_cols].values.astype(np.float32)
