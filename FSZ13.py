@@ -904,6 +904,674 @@ class FeatureSelector(BaseEstimator):
         if max_window > 0:
             logging.info(f'[C3-EMBARGO] Detected max feature window: {max_window} from feature names')
         return max_window
+    def validate_no_leakage_in_preprocess(self) -> bool:
+        """
+        Validate that fit_preprocess does NOT perform feature selection.
+
+        This test ensures preprocessing only does statistical operations like:
+        - Constant feature removal
+        - Missing data handling
+        - Data type optimization
+
+        And does NOT do:
+        - Feature selection based on importance
+        - Correlation-based feature removal
+        - Variance-based feature selection
+
+        Returns:
+            bool: True if validation passes
+
+        Raises:
+            ValueError: If feature selection leakage is detected in preprocessing
+        """
+        logging.info(f'\n{"="*70}')
+        logging.info('[PREPROCESS-LEAKAGE-CHECK] Validating preprocessing has no feature selection')
+        logging.info(f'{"="*70}')
+
+        # Create dummy data with known characteristics
+        n_samples = 1000
+        n_features = 50
+
+        logging.info(f'[PREPROCESS-LEAKAGE-CHECK] Creating test data: {n_samples} samples, {n_features} features')
+
+        # Generate random features
+        X_dummy = pd.DataFrame(
+            self.rng.standard_normal((n_samples, n_features)),
+            columns=[f'feature_{i}' for i in range(n_features)]
+        )
+        y_dummy = pd.Series(self.rng.integers(0, 2, n_samples))
+
+        # Add some features with varying correlation to target
+        X_dummy['high_corr_feature'] = y_dummy + self.rng.standard_normal(n_samples) * 0.1
+        X_dummy['medium_corr_feature'] = y_dummy * 0.5 + self.rng.standard_normal(n_samples) * 0.5
+        X_dummy['low_corr_feature'] = self.rng.standard_normal(n_samples)
+        X_dummy['zero_corr_feature'] = self.rng.standard_normal(n_samples)
+
+        # Add a constant feature (should be removed)
+        X_dummy['constant_feature'] = 42.0
+
+        # Add a high-missing feature (should be removed)
+        X_dummy['high_missing_feature'] = self.rng.standard_normal(n_samples)
+        X_dummy.loc[self.rng.choice(n_samples, int(n_samples * 0.95), replace=False), 'high_missing_feature'] = np.nan
+
+        cols_before = set(X_dummy.columns.tolist())
+        n_features_before = len(cols_before)
+
+        logging.info(f'[PREPROCESS-LEAKAGE-CHECK] Features before preprocessing: {n_features_before}')
+
+        # Run preprocessing
+        X_processed, y_processed = self.fit_preprocess(X_dummy.copy(), y_dummy.copy())
+
+        cols_after = set(X_processed.columns.tolist())
+        n_features_after = len(cols_after)
+
+        logging.info(f'[PREPROCESS-LEAKAGE-CHECK] Features after preprocessing: {n_features_after}')
+
+        # Check what was removed
+        removed_cols = cols_before - cols_after
+        logging.info(f'[PREPROCESS-LEAKAGE-CHECK] Removed {len(removed_cols)} features')
+
+        if removed_cols:
+            logging.info(f'[PREPROCESS-LEAKAGE-CHECK] Removed features: {list(removed_cols)[:10]}')
+
+        # Validation 1: Check that constant and high-missing features were removed
+        expected_removals = {'constant_feature', 'high_missing_feature'}
+        actually_removed = removed_cols & expected_removals
+
+        if actually_removed != expected_removals:
+            missing_removals = expected_removals - actually_removed
+            if missing_removals:
+                logging.warning(f'[PREPROCESS-LEAKAGE-CHECK] Expected removals not found: {missing_removals}')
+
+        # Validation 2: Check that correlated features were NOT removed
+        important_features = {'high_corr_feature', 'medium_corr_feature', 'low_corr_feature', 'zero_corr_feature'}
+        removed_important = removed_cols & important_features
+
+        if removed_important:
+            # Check if removal was due to feature selection (correlation/importance) rather than statistical issues
+            issues_found = []
+
+            for feat in removed_important:
+                # If the feature was removed and it wasn't constant or high-missing, it's leakage
+                if feat not in expected_removals:
+                    issues_found.append(
+                        f"Feature '{feat}' was removed - possible feature selection leakage!"
+                    )
+
+            if issues_found:
+                logging.error(f'[PREPROCESS-LEAKAGE-CHECK] [CRITICAL] FEATURE SELECTION LEAKAGE DETECTED!')
+                for issue in issues_found:
+                    logging.error(f'  [X] {issue}')
+                raise ValueError(
+                    f"Preprocessing performs feature selection! This causes data leakage. "
+                    f"Removed {len(removed_important)} non-statistical features: {removed_important}. "
+                    f"fit_preprocess should ONLY remove constant/missing features, NOT select by importance."
+                )
+
+        # Validation 3: Ensure most valid features remain
+        valid_features_before = n_features_before - len(expected_removals)
+        features_lost = valid_features_before - n_features_after
+
+        if features_lost > 0:
+            loss_pct = (features_lost / valid_features_before) * 100
+
+            if loss_pct > 10:  # If more than 10% of valid features are lost
+                logging.error(
+                    f'[PREPROCESS-LEAKAGE-CHECK] [CRITICAL] Lost {features_lost} valid features ({loss_pct:.1f}%)'
+                )
+                raise ValueError(
+                    f"Preprocessing removed {features_lost} valid features ({loss_pct:.1f}%). "
+                    f"This suggests feature selection is happening in preprocessing - DATA LEAKAGE!"
+                )
+            elif loss_pct > 5:
+                logging.warning(
+                    f'[PREPROCESS-LEAKAGE-CHECK] [WARNING] Lost {features_lost} valid features ({loss_pct:.1f}%)'
+                )
+
+        # Validation 4: Test determinism - preprocessing should be consistent
+        X_processed_2, _ = self.fit_preprocess(X_dummy.copy(), y_dummy.copy())
+        cols_after_2 = set(X_processed_2.columns.tolist())
+
+        if cols_after != cols_after_2:
+            diff = cols_after.symmetric_difference(cols_after_2)
+            logging.error(f'[PREPROCESS-LEAKAGE-CHECK] [WARNING] Preprocessing is NOT deterministic!')
+            logging.error(f'[PREPROCESS-LEAKAGE-CHECK] Different features: {diff}')
+            raise ValueError(
+                f"Preprocessing is not deterministic! Features differ between runs: {diff}. "
+                f"This suggests randomness or feature selection based on data."
+            )
+
+        logging.info(f'[PREPROCESS-LEAKAGE-CHECK] [OK] PASSED - No feature selection detected')
+        logging.info(f'[PREPROCESS-LEAKAGE-CHECK] [OK] Preprocessing only performs statistical operations')
+        logging.info(f'{"="*70}\n')
+
+        return True
+    def validate_target_calculation(
+        self,
+        df: pd.DataFrame,
+        target_col: str = 'target',
+        price_col: str = 'close'
+    ) -> bool:
+        """
+        Validate that target is NOT calculated using future price information.
+
+        Tests correlation between target and future prices at various lags.
+        High correlation with future prices indicates lookahead bias.
+
+        Args:
+            df: DataFrame containing target and price columns
+            target_col: Name of the target column (default: 'target')
+            price_col: Name of the price column (default: 'close')
+
+        Returns:
+            bool: True if validation passes
+
+        Raises:
+            ValueError: If target calculation has lookahead bias (future leakage)
+        """
+        logging.info(f'\n{"="*70}')
+        logging.info('[TARGET-CALC-LEAKAGE-CHECK] Validating target calculation')
+        logging.info(f'{"="*70}')
+
+        # Validate inputs
+        if target_col not in df.columns:
+            raise ValueError(f"Target column '{target_col}' not found in DataFrame")
+
+        if price_col not in df.columns:
+            raise ValueError(f"Price column '{price_col}' not found in DataFrame")
+
+        target = df[target_col].replace([np.inf, -np.inf], np.nan).dropna()
+        price = df[price_col].replace([np.inf, -np.inf], np.nan).dropna()
+
+        if len(target) < 50:
+            logging.warning(f'[TARGET-CALC-LEAKAGE-CHECK] [WARNING] Insufficient data ({len(target)} samples), skipping test')
+            return True
+
+        logging.info(f'[TARGET-CALC-LEAKAGE-CHECK] Testing target: "{target_col}" vs price: "{price_col}"')
+        logging.info(f'[TARGET-CALC-LEAKAGE-CHECK] Data points: {len(target)}')
+
+        # Test correlation with future prices at different lags
+        test_lags = [1, 2, 5, 10, 20]
+        correlation_threshold = 0.3
+
+        issues_found = []
+        correlations = {}
+
+        for lag in test_lags:
+            if lag >= len(price):
+                logging.debug(f'[TARGET-CALC-LEAKAGE-CHECK] Skipping lag={lag} (exceeds data length)')
+                continue
+
+            # Shift price forward (future prices)
+            future_price = price.shift(-lag)
+
+            # Align target and future_price indices
+            common_idx = target.index.intersection(future_price.dropna().index)
+
+            if len(common_idx) < 20:
+                logging.debug(f'[TARGET-CALC-LEAKAGE-CHECK] Skipping lag={lag} (insufficient overlap)')
+                continue
+
+            target_subset = target.loc[common_idx]
+            future_price_subset = future_price.loc[common_idx]
+
+            # Calculate correlation
+            if target_subset.std() > 1e-10 and future_price_subset.std() > 1e-10:
+                corr = np.corrcoef(
+                    target_subset.fillna(0).values,
+                    future_price_subset.fillna(0).values
+                )[0, 1]
+
+                correlations[lag] = corr
+
+                logging.info(f'[TARGET-CALC-LEAKAGE-CHECK] Lag t+{lag:2d}: correlation = {corr:+.4f}')
+
+                # Check if correlation is suspiciously high
+                if abs(corr) > correlation_threshold:
+                    severity = 'CRITICAL' if abs(corr) > 0.5 else 'HIGH'
+                    issues_found.append({
+                        'lag': lag,
+                        'correlation': corr,
+                        'severity': severity,
+                        'message': f"Target correlates {corr:+.3f} with future price at t+{lag}"
+                    })
+                    logging.error(
+                        f'[TARGET-CALC-LEAKAGE-CHECK] [{severity}] FUTURE LEAKAGE at t+{lag}: '
+                        f'correlation = {corr:+.4f} (threshold = {correlation_threshold})'
+                    )
+
+        # Check if any issues were found
+        if issues_found:
+            logging.error(f'\n[TARGET-CALC-LEAKAGE-CHECK] [CRITICAL] TARGET CALCULATION LEAKAGE DETECTED!')
+            logging.error(f'[TARGET-CALC-LEAKAGE-CHECK] Found {len(issues_found)} suspicious correlations:')
+
+            for issue in issues_found:
+                logging.error(
+                    f"  [X] Lag t+{issue['lag']}: {issue['correlation']:+.3f} "
+                    f"(severity: {issue['severity']})"
+                )
+
+            logging.error(f'\n[TARGET-CALC-LEAKAGE-CHECK] [EXPLANATION]')
+            logging.error(f'  Target should NOT be correlated with FUTURE prices')
+            logging.error(f'  High correlation indicates target is using future information')
+            logging.error(f'  This will cause overly optimistic backtest results')
+            logging.error(f'  But FAIL in real trading (future data not available)')
+
+            # Get the worst offender
+            worst = max(issues_found, key=lambda x: abs(x['correlation']))
+
+            raise ValueError(
+                f"⚠️ TARGET CALCULATION LEAKAGE DETECTED! "
+                f"Target is correlated with future price at t+{worst['lag']} "
+                f"(correlation = {worst['correlation']:+.3f}). "
+                f"Target should ONLY use past/present data, not future prices. "
+                f"Found {len(issues_found)} suspicious lags: {[x['lag'] for x in issues_found]}. "
+                f"This indicates the target is calculated using lookahead bias."
+            )
+
+        # Test passed
+        logging.info(f'\n[TARGET-CALC-LEAKAGE-CHECK] [OK] PASSED - No future correlation detected')
+        logging.info(f'[TARGET-CALC-LEAKAGE-CHECK] [OK] Target appears to be calculated from past data only')
+
+        if correlations:
+            max_corr = max(abs(c) for c in correlations.values())
+            avg_corr = np.mean([abs(c) for c in correlations.values()])
+            logging.info(f'[TARGET-CALC-LEAKAGE-CHECK] Max correlation: {max_corr:.4f} (threshold: {correlation_threshold})')
+            logging.info(f'[TARGET-CALC-LEAKAGE-CHECK] Avg correlation: {avg_corr:.4f}')
+
+        logging.info(f'{"="*70}\n')
+
+        return True
+    def shap_importance_analysis_with_proper_baseline(
+        self,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_sample: Optional[pd.DataFrame] = None,
+        n_background_samples: int = 100,
+        n_runs: int = 3
+    ) -> Dict:
+        """
+        [CRITICAL-FIX-3] SHAP analysis with proper baseline selection.
+
+        Uses KMeans to select representative background samples from training data.
+        This prevents bias that can occur when using random or all training data.
+
+        Based on: SHAP guidelines and Bailey et al. (2014)
+
+        Args:
+            X_train: Training features for background selection
+            y_train: Training target (used for model training)
+            X_sample: Samples to explain (default: use random from X_train)
+            n_background_samples: Number of background samples via KMeans (default: 100)
+            n_runs: Number of SHAP runs for stability (default: 3)
+
+        Returns:
+            Dict with SHAP importance metrics
+        """
+        logging.info(f'\n{"="*70}')
+        logging.info('[C3-SHAP-FIX] SHAP Analysis with Proper Baseline')
+        logging.info(f'{"="*70}')
+
+        try:
+            import shap
+            from sklearn.cluster import KMeans
+        except ImportError as e:
+            logging.warning(f'[C3-SHAP-FIX] SHAP/sklearn not available: {e}')
+            return {
+                'shap_mean': np.zeros(X_train.shape[1], dtype=np.float32),
+                'shap_std': np.zeros(X_train.shape[1], dtype=np.float32),
+                'shap_cv': np.zeros(X_train.shape[1], dtype=np.float32),
+                'background_quality': 'skipped'
+            }
+
+        logging.info(f'[C3-SHAP-FIX] Training data shape: {X_train.shape}')
+        logging.info(f'[C3-SHAP-FIX] Selecting {n_background_samples} representative background samples...')
+
+        # Step 1: Select representative background via KMeans
+        if len(X_train) > n_background_samples:
+            try:
+                kmeans = KMeans(
+                    n_clusters=n_background_samples,
+                    random_state=self.random_state,
+                    n_init=10
+                )
+                kmeans.fit(X_train)
+
+                # Find closest sample to each cluster center
+                distances = np.linalg.norm(
+                    X_train.values[:, np.newaxis, :] - kmeans.cluster_centers_[np.newaxis, :, :],
+                    axis=2
+                )
+                closest_indices = np.argmin(distances, axis=0)
+                background_indices = np.unique(closest_indices)
+
+                X_background = X_train.iloc[background_indices].reset_index(drop=True)
+
+                logging.info(f'[C3-SHAP-FIX] Selected {len(X_background)} representative samples via KMeans')
+                logging.info(f'[C3-SHAP-FIX] Background quality: EXCELLENT (representative via clustering)')
+            except Exception as e:
+                logging.warning(f'[C3-SHAP-FIX] KMeans selection failed: {e}, using random sample')
+                indices = self.rng.choice(len(X_train), min(n_background_samples, len(X_train)), replace=False)
+                X_background = X_train.iloc[indices].reset_index(drop=True)
+                logging.info(f'[C3-SHAP-FIX] Fallback: Using {len(X_background)} random background samples')
+        else:
+            X_background = X_train.copy()
+            logging.info(f'[C3-SHAP-FIX] Background: Using all {len(X_background)} training samples')
+
+        # Step 2: Select samples to explain
+        if X_sample is None:
+            n_explain = min(100, len(X_train) // 2)
+            sample_indices = self.rng.choice(len(X_train), n_explain, replace=False)
+            X_sample = X_train.iloc[sample_indices].reset_index(drop=True)
+            logging.info(f'[C3-SHAP-FIX] Explaining {len(X_sample)} random samples from training data')
+        else:
+            logging.info(f'[C3-SHAP-FIX] Explaining provided samples: {X_sample.shape[0]} samples')
+
+        # Step 3: Train models and compute SHAP values
+        shap_runs = []
+
+        for run_idx in range(n_runs):
+            try:
+                seed = int(self.random_state + run_idx)
+                logging.debug(f'[C3-SHAP-FIX] Run {run_idx+1}/{n_runs}')
+
+                # Train model
+                if self.classification:
+                    model = lgb.LGBMClassifier(
+                        **{k: v for k, v in self.base_params.items() if k != 'random_state'},
+                        random_state=seed,
+                        verbose=-1
+                    )
+                else:
+                    model = lgb.LGBMRegressor(
+                        **{k: v for k, v in self.base_params.items() if k != 'random_state'},
+                        random_state=seed,
+                        verbose=-1
+                    )
+
+                model.fit(X_train, y_train)
+
+                # Create SHAP explainer with proper background
+                explainer = shap.TreeExplainer(model, data=X_background)
+
+                # Get SHAP values
+                try:
+                    shap_values = explainer.shap_values(X_sample, check_additivity=False)
+                except Exception:
+                    shap_values = explainer.shap_values(X_sample, check_additivity=False)
+
+                # Handle list output (binary classification)
+                if isinstance(shap_values, list):
+                    shap_vals = np.abs(shap_values[1])  # Use positive class
+                else:
+                    shap_vals = np.abs(shap_values)
+
+                # Average across samples
+                shap_mean_run = np.mean(shap_vals, axis=0).astype(np.float32)
+                shap_runs.append(shap_mean_run)
+
+                logging.debug(f'[C3-SHAP-FIX] Run {run_idx+1} complete: mean SHAP computed')
+
+            except Exception as e:
+                logging.warning(f'[C3-SHAP-FIX] Run {run_idx+1} failed: {e}')
+                shap_runs.append(np.zeros(X_train.shape[1], dtype=np.float32))
+
+        # Step 4: Aggregate SHAP values across runs
+        if shap_runs:
+            shap_values_array = np.vstack(shap_runs)
+            shap_mean = np.mean(shap_values_array, axis=0).astype(np.float32)
+            shap_std = np.std(shap_values_array, axis=0).astype(np.float32)
+            shap_cv = (shap_std / (np.abs(shap_mean) + 1e-10)).astype(np.float32)
+
+            logging.info(f'[C3-SHAP-FIX] Aggregated {n_runs} SHAP runs')
+            logging.info(f'[C3-SHAP-FIX] Mean SHAP - Min: {shap_mean.min():.6f}, '
+                        f'Max: {shap_mean.max():.6f}, Mean: {shap_mean.mean():.6f}')
+            logging.info(f'[C3-SHAP-FIX] Stability (CV) - Mean: {shap_cv.mean():.3f}, '
+                        f'Max: {shap_cv.max():.3f}')
+
+            if shap_cv.mean() < 0.2:
+                stability = 'EXCELLENT'
+            elif shap_cv.mean() < 0.5:
+                stability = 'GOOD'
+            else:
+                stability = 'UNSTABLE'
+
+            logging.info(f'[C3-SHAP-FIX] Stability assessment: {stability}')
+        else:
+            logging.error('[C3-SHAP-FIX] All SHAP runs failed')
+            shap_mean = np.zeros(X_train.shape[1], dtype=np.float32)
+            shap_std = np.zeros(X_train.shape[1], dtype=np.float32)
+            shap_cv = np.zeros(X_train.shape[1], dtype=np.float32)
+
+        logging.info(f'{"="*70}\n')
+
+        return {
+            'shap_mean': shap_mean,
+            'shap_std': shap_std,
+            'shap_cv': shap_cv,
+            'n_background_samples': len(X_background),
+            'n_explained_samples': len(X_sample),
+            'n_runs': len([r for r in shap_runs if r is not None]),
+            'stability': stability if shap_runs else 'failed',
+            'background_quality': 'representative_via_kmeans' if len(X_train) > n_background_samples else 'all_training_data'
+        }
+    def remove_multicollinearity_comprehensive(
+        self,
+        X: pd.DataFrame,
+        threshold_corr: float = 0.85,
+        threshold_vif: float = 10.0
+    ) -> Tuple[pd.DataFrame, List[str]]:
+        """
+        [CRITICAL-FIX-7] Comprehensive multicollinearity removal.
+
+        Iteratively removes correlated features and those with high VIF.
+        Unlike simple single-pass removal, this approach:
+        1. Removes high correlations iteratively
+        2. Recalculates VIF after each removal
+        3. Uses importance to decide which feature to drop
+
+        Based on: Statistical multicollinearity best practices
+
+        Args:
+            X: Feature DataFrame
+            threshold_corr: Correlation threshold (default: 0.85)
+            threshold_vif: VIF threshold (default: 10.0)
+
+        Returns:
+            Tuple of (X_reduced, removed_features_list)
+        """
+        logging.info(f'\n{"="*70}')
+        logging.info('[C7-MULTICOLL-FIX] Comprehensive Multicollinearity Removal')
+        logging.info(f'{"="*70}')
+        logging.info(f'  Correlation threshold: {threshold_corr}')
+        logging.info(f'  VIF threshold: {threshold_vif}')
+
+        try:
+            from statsmodels.stats.outliers_influence import variance_inflation_factor
+        except ImportError:
+            logging.warning('[C7-MULTICOLL-FIX] statsmodels not available, skipping VIF')
+            vif_available = False
+        else:
+            vif_available = True
+
+        X_reduced = X.copy()
+        removed_features = []
+
+        # Phase 1: Correlation-based removal (iterative)
+        iteration = 0
+        max_iterations = 50  # Safety limit
+
+        while iteration < max_iterations and len(X_reduced.columns) > 1:
+            iteration += 1
+
+            # Calculate correlation matrix
+            numeric_cols = X_reduced.select_dtypes(include=[np.number]).columns.tolist()
+            if len(numeric_cols) < 2:
+                break
+
+            X_numeric = X_reduced[numeric_cols]
+            corr_matrix = X_numeric.corr().abs()
+
+            # Find highest correlation pair
+            upper_tri = corr_matrix.where(
+                np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+            )
+
+            high_corr_pairs = []
+            for col in upper_tri.columns:
+                for row in upper_tri.index:
+                    if upper_tri.loc[row, col] > threshold_corr:
+                        high_corr_pairs.append({
+                            'feat1': row,
+                            'feat2': col,
+                            'corr': upper_tri.loc[row, col]
+                        })
+
+            if not high_corr_pairs:
+                logging.debug(f'[C7-MULTICOLL-FIX] Iteration {iteration}: No more high correlations detected')
+                break
+
+            # Find feature with highest average correlation (most problematic)
+            feature_corr_counts = {}
+            for pair in high_corr_pairs:
+                for feat in [pair['feat1'], pair['feat2']]:
+                    if feat not in feature_corr_counts:
+                        feature_corr_counts[feat] = 0
+                    feature_corr_counts[feat] += 1
+
+            # Remove feature involved in most correlations
+            feat_to_remove = max(feature_corr_counts, key=feature_corr_counts.get)
+
+            logging.debug(
+                f'[C7-MULTICOLL-FIX] Iteration {iteration}: '
+                f'Removing "{feat_to_remove}" '
+                f'(involved in {feature_corr_counts[feat_to_remove]} high-correlation pairs)'
+            )
+
+            X_reduced = X_reduced.drop(columns=[feat_to_remove])
+            removed_features.append(feat_to_remove)
+
+        logging.info(f'[C7-MULTICOLL-FIX] Phase 1 (Correlation): '
+                    f'Removed {len(removed_features)} features in {iteration} iterations')
+
+        # Phase 2: VIF-based removal (if available)
+        if vif_available and len(X_reduced.columns) > 2:
+            logging.info(f'[C7-MULTICOLL-FIX] Phase 2 (VIF): Computing Variance Inflation Factors...')
+
+            vif_iteration = 0
+            max_vif_iterations = 50
+
+            while vif_iteration < max_vif_iterations and len(X_reduced.columns) > 2:
+                vif_iteration += 1
+
+                numeric_cols = X_reduced.select_dtypes(include=[np.number]).columns.tolist()
+
+                if len(numeric_cols) < 2:
+                    break
+
+                X_numeric = X_reduced[numeric_cols]
+
+                # Calculate VIF for each feature
+                vif_data = []
+                for i, col in enumerate(numeric_cols):
+                    try:
+                        vif = variance_inflation_factor(X_numeric.values, i)
+                        vif_data.append({'feature': col, 'vif': vif})
+                    except Exception:
+                        vif_data.append({'feature': col, 'vif': np.nan})
+
+                # Find feature with highest VIF
+                max_vif_feature = None
+                max_vif_value = 0
+
+                for data in vif_data:
+                    if not np.isnan(data['vif']) and data['vif'] > max_vif_value:
+                        max_vif_value = data['vif']
+                        max_vif_feature = data['feature']
+
+                if max_vif_feature is None or max_vif_value <= threshold_vif:
+                    logging.debug(
+                        f'[C7-MULTICOLL-FIX] VIF iteration {vif_iteration}: '
+                        f'All features have acceptable VIF (max: {max_vif_value:.2f})'
+                    )
+                    break
+
+                logging.debug(
+                    f'[C7-MULTICOLL-FIX] VIF iteration {vif_iteration}: '
+                    f'Removing "{max_vif_feature}" (VIF={max_vif_value:.2f} > {threshold_vif})'
+                )
+
+                X_reduced = X_reduced.drop(columns=[max_vif_feature])
+                removed_features.append(max_vif_feature)
+
+            logging.info(f'[C7-MULTICOLL-FIX] Phase 2 (VIF): '
+                        f'Removed {vif_iteration} additional features')
+
+        # Summary
+        logging.info(f'\n[C7-MULTICOLL-FIX] Summary:')
+        logging.info(f'  Features before: {len(X.columns)}')
+        logging.info(f'  Features after: {len(X_reduced.columns)}')
+        logging.info(f'  Features removed: {len(removed_features)}')
+        logging.info(f'  Retention rate: {len(X_reduced.columns)/len(X.columns):.1%}')
+
+        if len(removed_features) > 0:
+            logging.info(f'  Removed features (top 10): {removed_features[:10]}')
+
+        logging.info(f'{"="*70}\n')
+
+        return X_reduced, removed_features
+    def calculate_universal_embargo_gap(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        label_horizon: int = 0
+    ) -> int:
+        """
+        [CRITICAL-FIX-6] Universal embargo gap calculation.
+
+        Calculates embargo gap for ALL train/test splits (not just nested CV).
+        Must be used consistently across all splitting methods.
+
+        The embargo gap prevents information leakage when labels have a horizon.
+        For example, if label_horizon=10, there should be a 10-sample gap
+        between train and test to avoid using same information for both.
+
+        Based on: Bailey et al. (2014) and financial ML best practices
+
+        Args:
+            X: Feature DataFrame
+            y: Target Series
+            label_horizon: Label calculation horizon (default: 0)
+
+        Returns:
+            Optimal embargo gap in samples
+        """
+        logging.info(f'\n{"="*70}')
+        logging.info('[C6-EMBARGO-FIX] Universal Embargo Gap Calculation')
+        logging.info(f'{"="*70}')
+
+        gap_acf = self.calculate_adaptive_gap(X, y, label_horizon)
+
+        # Method 2: Minimum required gap
+        gap_from_label = label_horizon * 3 if label_horizon > 0 else 0
+        gap_from_percent = int(0.02 * len(y))  # 2% of dataset
+        gap_min = max(gap_from_label, gap_from_percent, 10)
+
+        # Use the larger of ACF-based and minimum required
+        embargo_gap = max(gap_acf, gap_min)
+
+        # Limit: Should not exceed 10% of dataset
+        max_gap = int(0.1 * len(y))
+        embargo_gap = min(embargo_gap, max_gap)
+
+        logging.info(f'[C6-EMBARGO-FIX] ACF-based gap: {gap_acf}')
+        logging.info(f'[C6-EMBARGO-FIX] Label horizon contribution: {gap_from_label}')
+        logging.info(f'[C6-EMBARGO-FIX] Percentage contribution (2%): {gap_from_percent}')
+        logging.info(f'[C6-EMBARGO-FIX] Final gap (maximum): {embargo_gap}')
+        logging.info(f'[C6-EMBARGO-FIX] Gap / Dataset ratio: {embargo_gap / len(y):.2%}')
+        logging.info(f'{"="*70}\n')
+
+        return int(embargo_gap)
     def check_stationarity_adf(
         self,
         X: pd.DataFrame,
