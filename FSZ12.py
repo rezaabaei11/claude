@@ -1565,6 +1565,10 @@ class FeatureSelector(BaseEstimator):
                      f'mean={final_weights.mean():.3f}, max={final_weights.max():.3f}')
         return final_weights
     def compute_sample_weights(self, y: pd.Series, temporal_decay: float = None, half_life: int = None) -> np.ndarray:
+        """
+        [C5-FIX] Improved sample weights with temporal decay, NO label_horizon leakage
+        Lopez de Prado (2018): Sample weights based on recency, not future info
+        """
         if half_life is None and hasattr(self, 'sample_weight_half_life'):
             half_life = self.sample_weight_half_life
         if temporal_decay is None and hasattr(self, 'temporal_decay'):
@@ -1584,10 +1588,87 @@ class FeatureSelector(BaseEstimator):
             time_weights = np.power(temporal_decay, np.arange(n-1, -1, -1))
             combined = class_weights * time_weights
             combined = (combined / combined.sum() * n).astype(np.float32)
+            logging.debug(f"[C5-FIX] Sample weights computed: class-balanced + temporal decay (NO label_horizon)")
             return combined
         except Exception as e:
-            logging.warning(f'[C2-FIX] Sample weight computation failed: {str(e)} - using uniform weights')
+            logging.warning(f'[C5-FIX] Sample weight computation failed: {str(e)} - using uniform weights')
             return np.ones(len(y), dtype=np.float32)
+
+    def compute_sample_weights_by_uniqueness(
+        self,
+        y: pd.Series,
+        label_times: Optional[pd.DataFrame] = None,
+        temporal_decay: float = 0.95
+    ) -> np.ndarray:
+        """
+        [C5-ADVANCED] Sample weights based on label uniqueness - Lopez de Prado (2018)
+
+        Samples with fewer concurrent labels → higher weight
+        This avoids using future information (label_horizon) which causes leakage.
+
+        Args:
+            y: Target series
+            label_times: DataFrame with columns 't_start' and 't_end' for label concurrency
+            temporal_decay: Exponential decay factor for recency weighting
+
+        Returns:
+            Sample weights array, normalized to mean=1.0
+        """
+        n = len(y)
+
+        # Option 1: Simple overlap-based uniqueness (default)
+        if label_times is None:
+            logging.info("[C5-FIX] Using simple overlap-based uniqueness weighting")
+            # Estimate overlap from temporal proximity
+            overlap_weights = np.ones(n, dtype=np.float32)
+
+            # Simple heuristic: penalize samples near duplicates
+            for i in range(n):
+                nearby_count = 0
+                window = max(5, int(0.05 * n))  # 5% window
+                for j in range(max(0, i-window), min(n, i+window)):
+                    if i != j:
+                        nearby_count += 1
+                overlap_weights[i] = 1.0 / (1.0 + nearby_count / window)
+        else:
+            # Option 2: Exact overlap-based uniqueness using label_times
+            logging.info("[C5-FIX] Using exact label uniqueness weighting")
+            overlap_weights = np.ones(n, dtype=np.float32)
+
+            for i in range(n):
+                t_start_i = label_times.iloc[i]['t_start']
+                t_end_i = label_times.iloc[i]['t_end']
+
+                # Count overlapping labels
+                overlaps = (
+                    (label_times['t_start'] <= t_end_i) &
+                    (label_times['t_end'] >= t_start_i)
+                ).sum() - 1  # Exclude self
+
+                overlap_weights[i] = 1.0 / (1.0 + overlaps)
+
+        # Apply temporal decay (recent samples get higher weight)
+        time_weights = np.power(temporal_decay, np.arange(n-1, -1, -1))
+
+        # Combine uniqueness and temporal decay
+        final_weights = overlap_weights * time_weights
+        final_weights = final_weights / final_weights.mean()
+
+        # Apply class balancing if classification
+        if self.classification:
+            try:
+                class_weights = compute_sample_weight('balanced', y=y)
+                final_weights = final_weights * class_weights
+                final_weights = final_weights / final_weights.mean()
+            except Exception as e:
+                logging.warning(f"[C5-FIX] Class weight computation failed: {e}")
+
+        final_weights = final_weights.astype(np.float32)
+        logging.debug(f"[C5-FIX] Uniqueness weights: min={final_weights.min():.3f}, "
+                     f"mean={final_weights.mean():.3f}, max={final_weights.max():.3f}")
+
+        return final_weights
+
     def _calculate_optimal_shap_sample_size(self, n_features: int, n_samples: int) -> int:
             try:
                 recommended = int(20 * np.sqrt(max(1, n_features)))
@@ -3700,17 +3781,151 @@ class FeatureSelector(BaseEstimator):
         returns_per_signal: float = 0.01,
         annual_factor: int = 252
     ) -> float:
+        """
+        [DEPRECATED - Use calculate_sharpe_with_costs_and_dsr instead]
+        This method uses unrealistic constant returns. It's kept for backward compatibility.
+        """
         positions = np.where(y_pred_proba > 0.5, 1, -1)
         actual_returns = np.where(y_true == 1, returns_per_signal, -returns_per_signal)
         strategy_returns = positions * actual_returns
         mean_return = np.mean(strategy_returns)
         std_return = np.std(strategy_returns)
         if std_return < 1e-10:
-            logging.warning("[Sharpe] Zero volatility in strategy returns, returning 0")
+            logging.warning("[C4-WARN] Zero volatility in strategy returns, returning 0 - DEPRECATED METHOD")
             return 0.0
         sharpe = (mean_return / std_return) * np.sqrt(annual_factor)
-        logging.debug(f"[Sharpe] Mean return: {mean_return:.6f}, Std: {std_return:.6f}, Sharpe: {sharpe:.4f}")
+        logging.debug(f"[C4-WARN] DEPRECATED - Mean return: {mean_return:.6f}, Std: {std_return:.6f}, Sharpe: {sharpe:.4f}")
         return float(sharpe)
+
+    def calculate_sharpe_with_costs_and_dsr(
+        self,
+        signals: np.ndarray,
+        actual_price_returns: np.ndarray,
+        transaction_cost: float = 0.0002,
+        slippage: float = 0.0001,
+        n_trials: int = 100,
+        annual_factor: int = 252
+    ) -> Dict:
+        """
+        [C4-FIX] Calculate realistic Sharpe Ratio with costs and Deflated Sharpe Ratio
+
+        Based on: Bailey & Lopez de Prado (2014) - "The Deflated Sharpe Ratio"
+
+        Args:
+            signals: Array of signals (+1, -1, or 0)
+            actual_price_returns: Actual returns from price data (not assumed constant)
+            transaction_cost: Typical 0.0002 (2 pips for FX)
+            slippage: Typical 0.0001 (1 pip for FX)
+            n_trials: Number of strategies tested (for DSR adjustment)
+            annual_factor: 252 for daily, 52 for weekly, 12 for monthly
+
+        Returns:
+            Dict with sharpe, dsr, psr, and other metrics
+        """
+        try:
+            from scipy.stats import norm, skew, kurtosis
+        except ImportError:
+            logging.error("[C4-FIX] scipy.stats required for DSR calculation")
+            return {
+                'sharpe': 0.0,
+                'dsr': 0.0,
+                'psr': 0.0,
+                'error': 'scipy required'
+            }
+
+        if len(signals) < 2:
+            return {'sharpe': 0.0, 'dsr': 0.0, 'psr': 0.0, 'error': 'insufficient data'}
+
+        # 1. Calculate position changes and costs
+        position_changes = np.abs(np.diff(signals))
+        costs = position_changes * (transaction_cost + slippage)
+
+        # 2. Calculate strategy returns (signal * next return)
+        strategy_returns = signals[:-1] * actual_price_returns[1:]
+
+        # 3. Subtract costs to get net returns
+        net_returns = strategy_returns - costs
+
+        # 4. Calculate basic Sharpe Ratio
+        mean_ret = np.mean(net_returns)
+        std_ret = np.std(net_returns)
+
+        if std_ret < 1e-10:
+            logging.warning("[C4-FIX] Zero volatility in net returns")
+            return {
+                'sharpe': 0.0,
+                'dsr': 0.0,
+                'psr': 0.0,
+                'mean_return': 0.0,
+                'volatility': 0.0,
+                'total_costs': float(np.sum(costs)),
+                'n_trades': int(position_changes.sum()),
+                'error': 'zero volatility'
+            }
+
+        sharpe = (mean_ret / std_ret) * np.sqrt(annual_factor)
+
+        # 5. Calculate moments for DSR
+        skewness = skew(net_returns)
+        kurt = kurtosis(net_returns)
+
+        # 6. Variance of Sharpe (Bailey & Lopez de Prado formula)
+        T = len(net_returns)
+        var_sr = (1 / T) * (
+            1 + 0.5 * sharpe**2
+            - skewness * sharpe
+            + (kurt / 4) * sharpe**2
+        )
+        var_sr = max(1e-8, var_sr)  # Avoid division by zero
+
+        # 7. Expected Maximum SR under null hypothesis (no skill)
+        euler = 0.5772156649  # Euler-Mascheroni constant
+        sr_threshold = np.sqrt(var_sr) * (
+            (1 - euler) * norm.ppf(1 - 1/n_trials) +
+            euler * norm.ppf(1 - 1/(n_trials * np.e))
+        )
+
+        # 8. Deflated Sharpe Ratio
+        dsr = (sharpe - sr_threshold) / np.sqrt(var_sr) if np.sqrt(var_sr) > 1e-10 else 0.0
+
+        # 9. Probabilistic Sharpe Ratio
+        psr = norm.cdf(dsr)
+
+        # 10. Interpretation
+        if psr >= 0.95:
+            interpretation = "EXCELLENT - Strategy has strong skill (95%+ confidence)"
+        elif psr >= 0.90:
+            interpretation = "GOOD - Strategy likely has skill (90%+ confidence)"
+        elif psr >= 0.75:
+            interpretation = "MODERATE - Some evidence of skill"
+        elif psr >= 0.50:
+            interpretation = "WEAK - Likely due to luck, not skill"
+        else:
+            interpretation = "POOR - No evidence of skill"
+
+        result = {
+            'sharpe': float(sharpe),
+            'deflated_sharpe': float(dsr),
+            'probabilistic_sharpe': float(psr),
+            'sharpe_threshold': float(sr_threshold),
+            'mean_return': float(mean_ret * annual_factor),  # annualized
+            'volatility': float(std_ret * np.sqrt(annual_factor)),  # annualized
+            'total_costs': float(np.sum(costs)),
+            'n_trades': int(position_changes.sum()),
+            'skewness': float(skewness),
+            'kurtosis': float(kurt),
+            'var_sharpe': float(var_sr),
+            'n_trials': n_trials,
+            'n_observations': T,
+            'interpretation': interpretation,
+            'psr_level': float(psr)
+        }
+
+        logging.info(f"[C4-FIX] Sharpe={sharpe:.4f}, DSR={dsr:.4f}, PSR={psr:.4f}")
+        logging.info(f"[C4-FIX] {interpretation}")
+
+        return result
+
     def nested_cross_validation(
         self,
         X: pd.DataFrame,
@@ -4028,6 +4243,192 @@ class FeatureSelector(BaseEstimator):
                 'gross_profit': 0.0,
                 'gross_loss': 0.0
             }
+    def calculate_pbo_with_cscv(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        n_scenarios: int = 16,
+        n_strategies_per_scenario: int = 50,
+        random_state: int = None
+    ) -> Dict:
+        """
+        [C3-FIX] Probability of Backtest Overfitting using CSCV
+
+        Based on: Bailey et al. (2014) - "The Probability of Backtest Overfitting"
+
+        CSCV = Combinatorially Symmetric Cross-Validation
+        Tests multiple train/test scenarios to detect overfitting.
+
+        Args:
+            X: Features DataFrame
+            y: Target Series
+            n_scenarios: Number of CSCV train/test combinations (typically 16 or C(6,2)=15)
+            n_strategies_per_scenario: Different strategies to test per scenario
+            random_state: Random seed
+
+        Returns:
+            PBO metric and interpretation
+        """
+        from itertools import combinations
+        import lightgbm as lgb
+        from sklearn.metrics import accuracy_score
+
+        if random_state is None:
+            random_state = self.random_state
+
+        logging.info("="*70)
+        logging.info("[C3-FIX] PBO - BAILEY ET AL. (2014) CSCV IMPLEMENTATION")
+        logging.info(f"Creating {n_scenarios} CSCV scenarios with {n_strategies_per_scenario} strategies each")
+        logging.info("="*70)
+
+        n = len(X)
+        n_splits = 6  # CSCV typically uses 6 groups
+        group_size = n // n_splits
+
+        # Create fold indices
+        folds = [np.arange(i*group_size, min((i+1)*group_size, n)) for i in range(n_splits)]
+
+        # Generate all C(6,2) = 15 combinations for test set
+        test_combinations = list(combinations(range(n_splits), 2))
+        if len(test_combinations) > n_scenarios:
+            rng = np.random.default_rng(random_state)
+            test_combinations = list(rng.choice(range(len(test_combinations)), n_scenarios, replace=False).astype(int))
+            test_combinations = [test_combinations[i] for i in range(n_scenarios)]
+
+        logging.info(f"[C3-FIX] Using {len(test_combinations)} scenarios (out of C(6,2)={15})")
+
+        is_performance = []  # In-sample performance per scenario, per strategy
+        oos_performance = []  # Out-of-sample performance per scenario, per strategy
+
+        for scenario_idx, (test_fold_1, test_fold_2) in enumerate(test_combinations):
+            logging.debug(f"[C3-FIX] Scenario {scenario_idx+1}: Test folds {test_fold_1}, {test_fold_2}")
+
+            # Get train and test indices for this scenario
+            test_idx = np.concatenate([folds[test_fold_1], folds[test_fold_2]])
+            train_idx = np.concatenate([folds[i] for i in range(n_splits) if i not in [test_fold_1, test_fold_2]])
+
+            X_train = X.iloc[train_idx].reset_index(drop=True)
+            y_train = y.iloc[train_idx].reset_index(drop=True)
+            X_test = X.iloc[test_idx].reset_index(drop=True)
+            y_test = y.iloc[test_idx].reset_index(drop=True)
+
+            scenario_is_perf = []
+            scenario_oos_perf = []
+
+            rng = np.random.default_rng(random_state + scenario_idx)
+
+            # Test multiple strategies within this scenario
+            for strategy_id in range(n_strategies_per_scenario):
+                # Random feature selection
+                n_features = rng.integers(
+                    max(1, X_train.shape[1] // 4),
+                    max(2, X_train.shape[1] // 2) + 1
+                )
+                selected_features = list(rng.choice(
+                    range(X_train.shape[1]),
+                    size=min(n_features, X_train.shape[1]),
+                    replace=False
+                ))
+
+                try:
+                    model = lgb.LGBMClassifier(
+                        n_estimators=100,
+                        random_state=int(random_state + scenario_idx + strategy_id),
+                        verbose=-1,
+                        **{k: v for k, v in self.base_params.items() if k != 'n_estimators'}
+                    )
+
+                    model.fit(X_train.iloc[:, selected_features], y_train)
+
+                    # In-sample performance
+                    y_pred_is = (model.predict_proba(X_train.iloc[:, selected_features])[:, 1] > 0.5).astype(int)
+                    is_perf = accuracy_score(y_train, y_pred_is)
+                    scenario_is_perf.append(is_perf)
+
+                    # Out-of-sample performance
+                    y_pred_oos = (model.predict_proba(X_test.iloc[:, selected_features])[:, 1] > 0.5).astype(int)
+                    oos_perf = accuracy_score(y_test, y_pred_oos)
+                    scenario_oos_perf.append(oos_perf)
+
+                except Exception as e:
+                    logging.debug(f"[C3-FIX] Scenario {scenario_idx}, Strategy {strategy_id} failed: {e}")
+                    continue
+
+            is_performance.append(scenario_is_perf)
+            oos_performance.append(scenario_oos_perf)
+
+        # Calculate PBO
+        if not is_performance or not oos_performance:
+            logging.warning("[C3-FIX] Insufficient scenarios/strategies completed")
+            return {
+                'pbo': np.nan,
+                'method': 'cscv',
+                'interpretation': 'Insufficient data for PBO calculation',
+                'n_scenarios_completed': 0
+            }
+
+        is_performance = np.array(is_performance)  # (n_scenarios, n_strategies)
+        oos_performance = np.array(oos_performance)  # (n_scenarios, n_strategies)
+
+        # For each scenario, find the strategy with best IS performance
+        # and check its OOS rank
+        pbo_values = []
+
+        for scenario_idx in range(len(is_performance)):
+            is_perf = is_performance[scenario_idx]
+            oos_perf = oos_performance[scenario_idx]
+
+            if len(is_perf) < 2:
+                continue
+
+            best_is_idx = np.argmax(is_perf)
+            best_oos_perf = oos_perf[best_is_idx]
+
+            # Rank in OOS (how many strategies beat this one in OOS?)
+            better_oos = np.sum(oos_perf > best_oos_perf)
+            oos_rank = better_oos + 1  # Rank (1-indexed)
+
+            pbo_scenario = oos_rank / len(is_perf)
+            pbo_values.append(pbo_scenario)
+
+        if not pbo_values:
+            return {
+                'pbo': np.nan,
+                'method': 'cscv',
+                'interpretation': 'No valid scenarios',
+                'n_scenarios_completed': 0
+            }
+
+        pbo_values = np.array(pbo_values)
+        pbo_mean = np.mean(pbo_values)
+        pbo_std = np.std(pbo_values)
+
+        # Interpretation
+        if pbo_mean < 0.5:
+            status = "GOOD - Low overfitting risk, strategy appears robust"
+        elif pbo_mean < 0.7:
+            status = "MODERATE - Some overfitting detected"
+        else:
+            status = "HIGH RISK - Likely overfitted, results may not generalize"
+
+        logging.info(f"[C3-FIX] PBO Results:")
+        logging.info(f"  Mean PBO: {pbo_mean:.4f} ± {pbo_std:.4f}")
+        logging.info(f"  Min/Max PBO: {np.min(pbo_values):.4f} / {np.max(pbo_values):.4f}")
+        logging.info(f"  {status}")
+        logging.info("="*70)
+
+        return {
+            'pbo': float(pbo_mean),
+            'pbo_std': float(pbo_std),
+            'pbo_min': float(np.min(pbo_values)),
+            'pbo_max': float(np.max(pbo_values)),
+            'method': 'cscv',
+            'interpretation': status,
+            'n_scenarios': len(is_performance),
+            'n_strategies_per_scenario': n_strategies_per_scenario,
+            'is_overfitted': pbo_mean > 0.5
+        }
+
     def calculate_pbo_with_multiple_strategies(
         self,
         X: pd.DataFrame,
@@ -4036,11 +4437,16 @@ class FeatureSelector(BaseEstimator):
         random_state: int = None,
         use_diverse_methods: bool = False
     ) -> Dict:
+        """
+        [LEGACY] Simple PBO with single train/test split
+        For new code, use calculate_pbo_with_cscv() instead
+        """
         import lightgbm as lgb
         from sklearn.metrics import accuracy_score
         if random_state is None:
             random_state = self.random_state
         logging.info("="*70)
+        logging.warning("[C3-NOTE] Using legacy single-split PBO. Consider calculate_pbo_with_cscv() for better results.")
         if use_diverse_methods:
             logging.info("[HIGH-PRIORITY-FIX-6] PBO - DIVERSE METHODS IMPLEMENTATION")
             logging.info(f"Testing {n_strategies} different feature selection methods")
@@ -4308,28 +4714,33 @@ class FeatureSelector(BaseEstimator):
         y: pd.Series,
         n_splits: int = 10,
         retrain_frequency: int = 1,
-        min_train_size: int = None
+        min_train_size: int = None,
+        embargo_pct: float = 0.01
     ) -> Dict:
         logging.info(f'\n{"="*70}')
-        logging.info('[IMPROVEMENT-FIX-7] WALK-FORWARD ANALYSIS')
+        logging.info('[H1-FIX] WALK-FORWARD ANALYSIS WITH EMBARGO')
         logging.info(f'{"="*70}')
         logging.info(f'  Splits: {n_splits}, Retrain frequency: {retrain_frequency}')
+        logging.info(f'  Embargo: {embargo_pct*100:.1f}% of dataset')
         n_samples = len(X)
         if min_train_size is None:
             min_train_size = n_samples // 2
-        test_size = (n_samples - min_train_size) // n_splits
+        embargo_size = int(n_samples * embargo_pct)
+        test_size = (n_samples - min_train_size - embargo_size) // n_splits
         if test_size < 10:
             logging.warning(f'Test size too small ({test_size}), reducing n_splits')
-            n_splits = max(2, (n_samples - min_train_size) // 10)
-            test_size = (n_samples - min_train_size) // n_splits
-        logging.info(f'  Min train size: {min_train_size}, Test size per fold: {test_size}')
+            n_splits = max(2, (n_samples - min_train_size - embargo_size) // 10)
+            test_size = (n_samples - min_train_size - embargo_size) // n_splits
+        logging.info(f'  Min train size: {min_train_size}, Embargo size: {embargo_size}, Test size per fold: {test_size}')
         results = []
         model = None
         train_end = min_train_size
         for fold in range(n_splits):
             X_train = X.iloc[:train_end]
             y_train = y.iloc[:train_end]
-            test_start = train_end
+            embargo_start = train_end
+            embargo_end = train_end + embargo_size
+            test_start = embargo_end
             test_end = min(test_start + test_size, n_samples)
             if test_start >= n_samples:
                 logging.warning(f'Fold {fold}: No more test data available')
@@ -4368,6 +4779,8 @@ class FeatureSelector(BaseEstimator):
                 'fold': fold,
                 'train_start': 0,
                 'train_end': train_end,
+                'embargo_start': embargo_start,
+                'embargo_end': embargo_end,
                 'test_start': test_start,
                 'test_end': test_end,
                 'train_size': len(X_train),
@@ -4375,9 +4788,9 @@ class FeatureSelector(BaseEstimator):
                 'score': float(score),
                 'retrained': should_retrain
             })
-            logging.info(f'  Fold {fold}: Train[0:{train_end}], Test[{test_start}:{test_end}], '
+            logging.info(f'  Fold {fold}: Train[0:{train_end}], Embargo[{embargo_start}:{embargo_end}], Test[{test_start}:{test_end}], '
                         f'{metric_name}={score:.4f}{"*" if should_retrain else ""}')
-            train_end = test_end
+            train_end = test_end + embargo_size
         scores = [r['score'] for r in results]
         mean_score = np.mean(scores)
         std_score = np.std(scores)
